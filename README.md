@@ -113,6 +113,14 @@ bash tools/analysis/sdk_names.sh
 
 After renaming, rerun `analyze.ps1` so Ghidra picks up the names.
 
+## Phase 2: asset pipeline
+
+See [docs/ASSETS.md](docs/ASSETS.md). In short:
+- Only DS-hardware data is converted: **3D models → TMPM** (PSP-native vertices and swizzled GU textures), sound (SSEQ player needed) and the intro movie. Collision `.h`, ghosts, strings, Lua bytecode and 2D files are read unchanged by the ported code.
+- The BMD0 reader (`tools/assets/nitro3d.py`) parses all 2,230 files. It matches apicula on geometry (25/25 models) and textures (36/36).
+- **First PSP rendering:** `psp/viewer` draws a converted car with sceGu in PPSSPP, and checks itself by writing a screenshot (`tools/ppsspp_shot.ps1`).
+- Ghidra import fix: Thumb `BL` used as a long jump inside a function is now a branch (82 cases), so functions are no longer split. Use `tools/ghidra/decompile.ps1` for per-function C output.
+
 ## PSP build environment
 
 ```bash

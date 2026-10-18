@@ -19,9 +19,13 @@ import ghidra.app.script.GhidraScript;
 import ghidra.feature.fid.db.FidFile;
 import ghidra.feature.fid.db.FidFileManager;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.lang.Register;
+import ghidra.program.model.listing.FlowOverride;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.SourceType;
@@ -33,7 +37,7 @@ public class DsdImport extends GhidraScript {
 
 	private Memory mem;
 	private Register tmode;
-	private int functions, failedFunctions, contextConflicts, labels;
+	private int functions, failedFunctions, contextConflicts, labels, internalBranches;
 
 	@Override
 	public void run() throws Exception {
@@ -100,8 +104,8 @@ public class DsdImport extends GhidraScript {
 		}
 		applySymbols(syms);
 
-		println(String.format("DsdImport: %d functions created (%d failed, %d context conflicts), %d labels, %d overlays",
-			functions, failedFunctions, contextConflicts, labels, overlaySpaces.size()));
+		println(String.format("DsdImport: %d functions created (%d failed, %d context conflicts), %d labels, %d overlays, %d internal BL branches",
+			functions, failedFunctions, contextConflicts, labels, overlaySpaces.size(), internalBranches));
 	}
 
 	private void attachFid(File fidb) throws Exception {
@@ -136,7 +140,7 @@ public class DsdImport extends GhidraScript {
 		b.setWrite(true);
 	}
 
-	private record Sym(String name, String kind, boolean thumb, Address addr) {
+	private record Sym(String name, String kind, boolean thumb, Address addr, long size) {
 		boolean code() {
 			return kind.equals("function") || kind.equals("label");
 		}
@@ -158,8 +162,9 @@ public class DsdImport extends GhidraScript {
 			Matcher m = SYMBOL.matcher(line);
 			if (m.find()) {
 				String attrs = m.group(3) == null ? "" : m.group(3);
+				Matcher sz = Pattern.compile("size=0x([0-9a-fA-F]+)").matcher(attrs);
 				out.add(new Sym(m.group(1), m.group(2), attrs.startsWith("thumb"),
-					space.getAddress(Long.parseLong(m.group(4), 16))));
+					space.getAddress(Long.parseLong(m.group(4), 16)), sz.find() ? Long.parseLong(sz.group(1), 16) : 0));
 			}
 		}
 	}
@@ -182,12 +187,38 @@ public class DsdImport extends GhidraScript {
 			}
 		}
 		for (Sym s : syms) {
+			if (s.kind().equals("function")) {
+				disassemble(s.addr());
+			}
+		}
+		// Thumb CodeWarrior uses BL for long branches inside a function. Those are jumps, not calls:
+		// override their flow so Ghidra keeps one function body instead of splitting it at the target.
+		for (Sym s : syms) {
+			if (!s.kind().equals("function") || s.size() == 0) {
+				continue;
+			}
+			Address end = s.addr().add(s.size() - 1);
+			InstructionIterator ii = currentProgram.getListing().getInstructions(new AddressSet(s.addr(), end), true);
+			while (ii.hasNext()) {
+				Instruction ins = ii.next();
+				if (!ins.getFlowType().isCall()) {
+					continue;
+				}
+				for (Address t : ins.getFlows()) {
+					if (t.compareTo(s.addr()) > 0 && t.compareTo(end) <= 0) {
+						ins.setFlowOverride(FlowOverride.BRANCH);
+						internalBranches++;
+						break;
+					}
+				}
+			}
+		}
+		for (Sym s : syms) {
 			monitor.checkCancelled();
 			if (!s.kind().equals("function")) {
 				continue;
 			}
 			try {
-				disassemble(s.addr());
 				Function f = getFunctionAt(s.addr());
 				if (f == null) {
 					f = createFunction(s.addr(), null);
