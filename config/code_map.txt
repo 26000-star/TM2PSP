@@ -1,0 +1,26 @@
+# TM2PSP code map: which library each ARM9 address range belongs to, and what the port does with it.
+# Format: <block> <start> <end exclusive> <library> <action> # evidence
+# action: port = decompile and port; replace = use original source or a PSP equivalent; drop = not needed on PSP.
+# Boundaries come from ARM/Thumb mode changes plus the evidence in tools/analysis/classify.py (strings, I/O registers).
+
+arm9_main 02000000 02000800 bios_svc     replace # Thumb SVC stubs: BitUnPack, LZ77UnComp*, CpuSet, Div, Sqrt...
+arm9_main 02000800 02003000 crt0         replace # Entry, AutoloadCallback, init_cp15 (FID)
+arm9_main 02003000 02003430 game         port    # main()
+arm9_main 02003430 0201201c network      drop    # Ubiquitous CPS/SSL, NitroWiFi 2.1, DWC 3.1 auth/http: [SDK+UBIQUITOUS:*], nas.nintendowifi.net
+arm9_main 0201201c 020211e8 msl          replace # CodeWarrior MSL C/C++: memcpy (244 callers), printf float formatting, std::string/vector, exceptions
+arm9_main 020211e8 02023c84 zlib_unzip   replace # zlib "1.2.2" inflate + "unzip 0.15 Copyright 1998 Gilles Vollant"
+arm9_main 02023c84 0203ad78 nitro        replace # NitroSDK 4.2 + NitroSystem (ARM): OS/MI/IRQ/timer/PXI/GX/G2/G3/CP; NNS G2D ('CHAR','PLTT','CEBK')
+arm9_main 0203ad78 02041fe0 lua          replace # Lua 5.0.2 core + lauxlib + base/coroutine/table/math libs (luaL_reg tables at 020b8c00..)
+arm9_main 02041fe0 020435cc nitro        replace # NitroSDK CARD/BACKUP ([SDK+NINTENDO:BACKUP]), FS
+arm9_main 020435cc 020b2a80 game         port    # Firebrand engine + game: track pieces, cars, HUD, menus, modes, Lua table readers
+arm9_main 020b2a80 020b33bc game         port    # .init: __sinit_* static constructors
+itcm      01ff8000 01ffff80 nitro        replace # mostly SDK hot paths (IRQ, G3/CP register code); recheck before porting
+
+ov000     020d6b00 020f68e0 wfc_util     drop    # Nintendo WFC setup utility (msg/*.bmg.l, char/*.ncg.l, AOSS/MELCO)
+ov001     020d6b00 020f3be0 gamespy_http drop    # GameSpy HTTP/SOAP
+ov002     020d6b00 020f0920 game         port    # custom data UI: ghost/track saving, name entry
+ov003     020f68e0 02137980 game         port    # in-race: car audio, cameras, physics, gameplay
+ov004     020f68e0 02139280 game         port    # front end: statistics, shops, my tracks, hot seat
+ov005     02139280 02146280 multiboot    drop    # DS Download Play (ARM only, "ltiboot")
+ov006     02139280 02144ee0 gamespy      drop    # GameSpy matchmaking/stats (gamestats2.gs.nintendowifi.net)
+ov007     02139280 021392a0 empty        drop    # 32 bytes, no code

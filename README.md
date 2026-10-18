@@ -55,6 +55,52 @@ Open the result with `ghidraRun.bat` → File → Open Project → `ghidra/tmtur
 - Ghidra: all 10,634 entries were created with the correct mode (0 failures), and Ghidra found 42 more. Auto-analysis takes about 60 s. The decompiler handled all of a 202-function sample.
 - **NitroSDK FID: 1 match (`init_cp15`).** NTRGhidra's FIDB covers only SDK 3.0 ARM-mode filesystem code, and this game uses SDK 4.2, mostly in Thumb. SDK identification needs better signatures. Options: build FID/dsd signatures from a public NitroSDK-4.x decomp (pokeplatinum, pokeheartgold), or use string and SDK-banner anchors. That is the first job of phase 1.
 
+## Phase 1: code map (in progress)
+
+[config/code_map.txt](config/code_map.txt) assigns every ARM9 address range to a library and an action:
+
+| Action | Functions | Bytes | What |
+|---|---|---|---|
+| **port** | 6,193 | 973 KB | Firebrand engine + game: `main()`, main `0x020435CC..0x020B33BC`, ov002 (custom data UI), ov003 (race), ov004 (front end) |
+| replace | 1,601 | 223 KB | NitroSDK 4.2 + NitroSystem → PSP shim; MSL → newlib/libstdc++; zlib 1.2.2 + unzip 0.15 and Lua 5.0.2 → original sources |
+| drop | 2,882 | 312 KB | network stack (CPS/SSL/WiFi/DWC), ov000 WFC utility, ov001/ov006 GameSpy, ov005 Download Play |
+
+Findings:
+- Layout of main: BIOS stubs → crt0 → `main()` → network libs → MSL → zlib/unzip → NitroSDK/NitroSystem (ARM) → Lua (Thumb) → SDK CARD/BACKUP → game code → static constructors.
+- **The Lua scripts are pure data** (182 chunks, no function calls). The engine reads globals such as `carParams`, `Track`, `PieceData`, `tracks`, `credits` and `rewardShop` through about 60 call sites in total (`lua_rawgeti`, `lua_gettable`, `lua_next`, `luaL_ref`...). The Lua parser is not even linked, since the game only loads bytecode. Decompiled sources go to `assets/lua_src/` (git-ignored).
+- **Lua 5.0.2: 305 of 320 functions named**, plus Firebrand's fixed-point math library (`fxmath_*`). Consistency check: 799 matched call edges agree with the source call graph, 6 do not (self-recursion and one Firebrand-modified function). 21 of the 22 Lua functions the game calls are named.
+- CodeWarrior detail used for the matching: within each source file, **functions are emitted in reverse definition order**.
+
+Analysis pipeline (after `tools/ghidra/analyze.ps1`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\ghidra\export.ps1
+```
+
+```bash
+python -P tools/analysis/classify.py arm9_main
+```
+
+```bash
+python -P tools/analysis/code_map.py
+```
+
+```bash
+bash tools/analysis/lua_names.sh
+```
+
+| Script | Role |
+|---|---|
+| `tools/ghidra/ExportAnalysis.java` | per-function JSON Lines: callees, strings, I/O registers, function pointers |
+| `tools/analysis/romimage.py` | address-space view of `extract/` + dsd symbols |
+| `tools/analysis/find_reg_tables.py` | `{name, function}` tables (luaL_reg) |
+| `tools/analysis/classify.py`, `window.py` | evidence tags and address-window listings used to place library boundaries |
+| `tools/analysis/code_map.py` | applies `config/code_map.txt`, per-library totals |
+| `tools/analysis/align_lib.py`, `match_lib.py` | names a library from its source: anchors + order alignment + call-graph propagation |
+| `tools/analysis/apply_names.py` | writes names into dsd `symbols.txt` (placeholders only) |
+
+After renaming, rerun `analyze.ps1` so Ghidra picks up the names.
+
 ## PSP build environment
 
 ```bash
