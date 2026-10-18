@@ -47,7 +47,8 @@ cmake -S . -B build/host -G Ninja
 cmake --build build/host
 ```
 
-Targets: `tm_lua`, `tm_shim`, `tm_unzip`, `tm_game` (static libraries) and `tm_cfgdump` (test driver).
+Targets: `tm_lua`, `tm_shim`, `tm_unzip`, `tm_game` (static libraries), `tm_cfgdump` and `tm_trackdump` (test
+drivers).
 `tm_game` collects `src/game/**/*.cpp` automatically. The PSP build will use the same `CMakeLists.txt` through
 `psp-cmake` (which defines `PSP`, selecting `src/shim/psp/`).
 
@@ -152,13 +153,70 @@ All **4,258 files of vfs.zip** read through the ported VFS are byte-identical to
   with the real π), `cos(FlatAng)` via the sin/cos table, `Mass × RotInertia`, and percentages (/100).
   Quirks reproduced: `GripOversteer` is overwritten with `Grip`, and `FakePitchFactor` with an unloaded field / 5.
 
+## Vertical slice 2: track loading (done)
+
+`tm_trackdump --root extract/files [--track easy/0] --pieces --collision --lighting` loads the Coast piece
+catalogue, one race scene, the collision mesh of every model it uses and the lighting entries.
+`tools/host/check_track.py` re-reads the unluac decompilations and the `.h` files independently: **all 26 Coast
+tracks (practice, easy, medium, hard, extreme, bonus) give 0 errors**, and VFS and raw modes give identical output.
+Besides field-by-field comparisons, the check transforms every collision vertex with the dumped piece matrix and
+requires it to fall inside the piece's footprint cells, which validates the rotation and pivot rules geometrically.
+
+### Race setup and grid (main 0x0209fc8c, 0x0209fcd0, 0x020a1170..0x020a1200)
+
+- `dsRaceSetup` (`*0x020d6a30`): mode +0x10, environment +0x20 (0 sta, 1 isl, 2 sno, **3 coa**), time of day +0x24
+  (rise/day/set), difficulty +0x28 (practice/easy/medium/hard/extreme), track number +0x2c, cell size +0xa4/+0xa8.
+- Cells: **Coast 16 × 4 units** (Island 64 × 8, others 32 × 8). Grid **22 × 20 × 22** cells on Coast and Island,
+  20³ elsewhere. Cell sizes go through software doubles everywhere: `d2i(i2d(n << 12) + 0.5)` (MSL `_dadd`
+  0x0201201c with 0.5 = `0x3fe00000`), which `dsRoundD` reproduces.
+
+### Piece catalogue (main 0x0209e674, singleton `*0x020d6644`)
+
+- `PieceData/<env>/PieceData` (global `PieceData`, 149 pieces on Coast) → `dsPieceInfo` (0x58 bytes): Name, ID,
+  Type (normal/start/finish/checkpoint/multilap), Width/Height/Depth in cells, CostMem/CostPoly, HasGround/HasAir,
+  BelowGnd+Cullable, IsPillar+HasPillars, Helper, DesignerTPV, DisableNotch, NotchData, IsLooseTPV, ColumnNotches,
+  InitDir, InitPosAir/Ground, TriggerSize (default per environment: Coast 16 × 14 × 7).
+- Model names: `<name>ground` / `<name>air`; a piece with neither flag uses its name for both (for the air one only
+  when not BelowGnd, or on Island/Coast). Pieces without ID get the first free id in 1..349. Snow links
+  `<name>pillar1/2/4/8`. One Coast piece has an empty name (id 149).
+- Ground level `+0x38` = 3 on Coast: a piece placed above cell y = 3 uses its air model (pillars down to the sea).
+
+### Track scenes (ov003 0x0211b404; front-end header reader main 0x0209fd2c)
+
+- `Scenes/<env>/<difficulty>/<n>.dcsc`, global `Track`: `{"Environment", e}`, `{"TimeOfDay", t}`,
+  `{"AuthorTime", s}`, `{"AuthorName", "…"}`, `{"LapCount", n}`, then `{name, rotation, x, y, z}` per piece, in cells
+  (fx32 integers). Medal times: gold = author + 2 s, silver = gold + 3 s, bronze = silver + 5 s (0x0209fa5c).
+- Position = cell × cell size (rounded fx multiply with the fraction dropped, then `dsRoundD`); y gets + 0.35
+  (0x59a) + a per-environment offset that is zero everywhere.
+- **Coast and Island skip their terrain pieces** (`wcliff*`/`dcliff*` and `beach*`, six ids, ov003 0x02100d7c /
+  0x02100438): the game rebuilds the terrain itself (`dsTerrain_Build`, ov003 0x02100b2c, not ported yet).
+- Placement (ov003 0x0211f088 + 0x0211f2f0): model matrix = `MTX_RotY43_` of rotation × π/2 (sin/cos table index
+  `65535·a/2π >> 4`, so a quarter turn gives cos = 6/4096, as on the DS), translated to the origin cell. A W × D piece
+  grows towards **−x and +z** from its origin cell; rotations 1/2/3 move the origin by (D−1)/(W−1) cells so the
+  footprint stays on the same cells. Cell index of a position = `FX_Div(pos, cell) >> 12` (0x0211fe08).
+- Bit-packed tracks (editor, download play; ov003 0x0211a1f0) store per piece 8+2 bits id, 2 bits rotation and three
+  5-bit cell coordinates; they use the same placement code (not ported: race tracks are Lua).
+
+### Collision meshes (main 0x02065c04, 0x02065804, 0x02073500, 0x02065b2c; format in ASSETS.md)
+
+- The collision world (`*0x020c8e78`, vtable 0x020bd390) creates shapes: +0x10 plane (type 3), +0x14/+0x18 mesh
+  (type 2) bound to a shared `dsCollisionMesh` resource from the resource cache (0x0205bcb0). Pair tests dispatch
+  through a type × type table (0x0205b3c0); segment batches run in ITCM (0x01ffb28c).
+- ITCM holds Firebrand's own math (0x01ffa6ec..0x01ffab20: matrix copy/identity, vector × 3×3 truncating, magnitude,
+  normalise with the divider and sqrt units started together), ported in `src/game/math/dsMath.cpp`.
+
+### Lighting (ov003 0x0211c5d4, main 0x02098aac)
+
+- `Scripts/config/tracks` global `tracks["<env>_<tod>"]`: eight RGB colours (fx32 0..1) at a 16-byte stride, then
+  two scalars (entry 24 × 41/4096 → +0xe0, entry 25 → +0xdc). Meaning of each colour to be found with the renderer.
+
 ## Next slices
 
-1. **Track loading**: `PieceData` reader (main 0x0209e674, `PieceData/%s/PieceData`, pillars), `Track` reader
-   (0x0209fd2c; ov003 0x0211b11c/0x0211b404), `config/tracks` (0x02098aac, ov003 0x0211c5d4), environment assets
-   (0x02099e6c: `graphics/tracks/%s/texturebatch.n`, `material.bin`, sky), `.h` collision (`_dup.h` at 0x0209947c);
-   confirm the collision grid semantics from that code.
-2. **Car physics update** (ov003, consumer of `dsCarParams`), cameras (`config/cameras`), car audio parameters.
-3. Renderer: Firebrand's BMD0/G3 path onto an OpenGL host back-end (TMPM from phase 2 for the PSP).
+1. **Car physics update** (ov003, consumer of `dsCarParams`), the collision queries it uses (segment DDA 0x01ffe3ec,
+   mesh shape tests, terrain), cameras (`config/cameras`). Deterministic unit tests (car dropped on a flat piece
+   settles, then accelerates).
+2. Terrain builder (ov003 0x02100b2c and callees) so Coast cliffs and beaches exist for collision and display.
+3. Renderer: Firebrand's BMD0/G3 path onto an OpenGL host back-end (TMPM from phase 2 for the PSP); environment
+   assets (main 0x02099e6c: `texturebatch.n`, `material.bin`, sky, sea).
 4. Host executable with SDL2 (window, pad), main loop from `main()` (0x02003000).
 5. Dynamic coverage trace in melonDS to rank the 4,200 race functions.

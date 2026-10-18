@@ -37,11 +37,25 @@ typedef s64 fx64;
 /* 4096 (sin, cos) pairs, fx16. The SDK ships it as data; the shim generates it (FX_Init). */
 extern s16 FX_SinCosTable_[4096 * 2];
 
+typedef s64 fx64c; /* 32.32 fixed point (hardware divider results) */
+
 void FX_Init(void);
 fx32 FX_Div(fx32 numer, fx32 denom);
 fx32 FX_Inv(fx32 denom);
+fx64c FX_DivFx64c(fx32 numer, fx32 denom); /* (numer << 32) / denom, 64/32 divider mode */
+fx64c FX_InvFx64c(fx32 denom);             /* FX_DivFx64c(FX32_ONE, denom) */
 s32 FX_ModS32(s32 a, s32 b);
 fx32 FX_Sqrt(fx32 x);
+
+/* ---- VEC / MTX ---- */
+typedef struct { fx32 x, y, z; } VecFx32;
+typedef struct { fx16 x, y, z; } VecFx16;
+/* 4x3 matrix, row vectors: rows 0..2 are the rotation, row 3 the translation (m[3] = _30 _31 _32). */
+typedef struct { fx32 m[4][3]; } MtxFx43;
+
+fx32 VEC_DotProduct(const VecFx32 *a, const VecFx32 *b);
+void VEC_CrossProduct(const VecFx32 *a, const VecFx32 *b, VecFx32 *out);
+void MTX_RotY43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal);
 
 /* ---- FS: ROM file system (backed by a host directory) ---- */
 typedef enum { FS_SEEK_SET = 0, FS_SEEK_CUR = 1, FS_SEEK_END = 2 } FSSeekFileMode;

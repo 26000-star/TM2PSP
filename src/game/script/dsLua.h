@@ -32,6 +32,8 @@ public:
     bool HasField(const char *name) const;            // 0x020692d0
     int FieldNumber(const char *name) const;          // 0x020691e4
     int IndexNumber(int i) const;                     // 0x02069230: element i (0-based) of an array
+    const char *FieldString(const char *name) const;  // 0x02069154 (NULL when not a string or number)
+    const char *IndexString(int i) const;             // 0x020691a0
     dsLuaObject Value(const dsLuaObject &key) const;  // 0x02069274
 
     // Table iteration: Begin returns the first key, Next the key after it; a NIL key ends the loop.

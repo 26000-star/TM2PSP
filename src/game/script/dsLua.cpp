@@ -136,6 +136,28 @@ int dsLuaObject::IndexNumber(int i) const
     return v;
 }
 
+// The string stays valid after the pop because the table still references it.
+// @port main:02069154 done
+const char *dsLuaObject::FieldString(const char *name) const
+{
+    lua_rawgeti(m_L, LUA_REGISTRYINDEX, m_ref);
+    lua_pushstring(m_L, name);
+    lua_gettable(m_L, -2);
+    const char *v = lua_tostring(m_L, -1);
+    lua_settop(m_L, -3);
+    return v;
+}
+
+// @port main:020691a0 done
+const char *dsLuaObject::IndexString(int i) const
+{
+    lua_rawgeti(m_L, LUA_REGISTRYINDEX, m_ref);
+    lua_rawgeti(m_L, -1, i + 1);
+    const char *v = lua_tostring(m_L, -1);
+    lua_settop(m_L, -3);
+    return v;
+}
+
 // @port main:02069274 done
 dsLuaObject dsLuaObject::Value(const dsLuaObject &key) const
 {

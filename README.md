@@ -143,6 +143,9 @@ In short:
 - **First slice runs on the host:** the VFS (`vfs.zip` + the `vfs.bin` directory tree), Firebrand's Lua layer and the
   ov003 car parameter loader. All 4,258 VFS files read back identical, and the 4 cars' 320 values match the unluac
   decompilation.
+- **Second slice: track loading.** The Coast piece catalogue, the race scenes, piece placement and the `.h` collision
+  meshes (format now confirmed from the code). All 26 Coast tracks match an independent reading of the scripts and
+  meshes, including a geometric check of every placed piece.
 
 ```bash
 cmake -S . -B build/host -G Ninja
@@ -158,6 +161,14 @@ build/host/tm_cfgdump --root extract/files --carparams > build/host/carparams.tx
 
 ```bash
 python -P tools/host/check_carparams.py build/host/carparams.txt
+```
+
+```bash
+build/host/tm_trackdump --root extract/files --track easy/0 --pieces --collision --lighting > build/host/track.txt
+```
+
+```bash
+python -P tools/host/check_track.py build/host/track.txt --track easy/0
 ```
 
 ```bash

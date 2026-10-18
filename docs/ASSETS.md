@@ -46,21 +46,29 @@ Written by `tools/assets/psp_model.py`, drawn by `psp/viewer/main.c`. Little end
 
 Viewer check: `bash tools/psp_build.sh psp/viewer`, then `powershell -File tools/ppsspp_shot.ps1 build/psp/viewer/EBOOT.PBP TM2PSPVIEW build/preview/x.png "<model.tmpm>=model.tmpm"`. The viewer writes `shot.bmp` after 45 frames. **Car `Cars/Sta/0/lod0.n` renders textured and lit in PPSSPP.**
 
-## Track piece collision `.h` (partial)
+## Track piece collision `.h`
+
+Confirmed from the loader (main 0x02065c04, `dsCollisionMesh::Load`) and checked on all 964 files (every byte accounted for):
 
 ```
 u16 version = 0x010E
-u16 n_verts, n_tris, unknown (1..4)
-n_verts × { s32 x, y, z }          // 20.12 fixed; pieces span ±8.0
+u16 n_verts, n_tris
+s16 has_materials                    // 0 in 89 files, 1..6 elsewhere: only "non-zero" matters
+n_verts × { s32 x, y, z }            // 20.12 fixed; pieces span ±8.0 per cell around the origin cell
 n_tris  × { u16 a, b, c }
-u32 n_cells16; n_cells16 × u16      // 6×24 lookup table, 0xFFFF = empty
+u32 n_cells                          // 0 = no grid (then only the materials follow)
+n_cells × u16 head                   // first node of the cell's list, 0xFFFF = empty; cell = x + gx*y + gx*gy*z
 u32 gx, gy, gz                       // grid dimensions (e.g. 6, 4, 6)
-s32 min[3]; s32 size[3]              // grid origin and extent (20.12)
-u32 n_lists; n_lists × { u16 count, u16 first }   // per-cell triangle lists
-... trailing bytes
+s32 min[3]; s32 size[3]              // grid origin and extent (20.12) = the mesh bounds
+u32 n_nodes; n_nodes × { u16 tri, u16 next }   // singly linked triangle lists, next 0xFFFF ends
+if has_materials: n_tris × u8        // surface per triangle: 0, 1, 3, 5..11, 255
 ```
 
-The exact grid semantics will be confirmed when the collision code is decompiled (phase 3).
+- The per-cell lists are **linked lists**, not `{count, first}` ranges: a triangle appears in every cell it touches.
+- Face normals are not stored: the loader computes `(b-a)×(c-a)` (`VEC_CrossProduct`, rounded), scales it by 2^-7 when a component exceeds 100.0, and normalises it to fx16 with the ITCM hardware-divider routine (0x01ffaac0).
+- The grid (0x02073500) also keeps `cellSize = size / dim` (fx32) and `dim / size` as a 32.32 value. Segment queries (0x0206614c) map points into grid space with it and walk the cells with a 3D DDA (0x01ffe3ec), gathering each cell's triangles once.
+- Paths: `graphics/` + `Tracks/<env>/<model>` + `.h`, where the model is the piece's `<name>ground` or `<name>air` (lower case).
+- `_dup.h` is only used by the wireless (download play) path, which renames shared assets.
 
 ## Other formats
 

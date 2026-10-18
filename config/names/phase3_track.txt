@@ -1,0 +1,87 @@
+# Names recovered in phase 3, slice 2 (track loading, piece catalogue, collision meshes).
+# Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- race setup singleton (*0x020d6a30) ----
+0209fc8c dsRaceSetup_SetEnvironment
+0209fcd0 dsRaceSetup_GridSize
+020a11f0 dsRaceSetup_EnvironmentName
+020a11b8 dsRaceSetup_TimeOfDayName
+020a11a4 dsRaceSetup_DifficultyName
+020a1170 dsRaceSetup_EnvironmentNameByIndex
+020a11cc dsRaceSetup_EnvironmentNameByIndex2
+
+# ---- piece catalogue (*0x020d6644) ----
+0209f4e4 dsPieceDataTable_ctor
+0209e674 dsPieceDataTable_Load
+0209e5a8 dsPieceDataTable_Clear
+0209f2dc dsPieceDataTable_FindByName
+0209f368 dsPieceDataTable_GetByName
+0209f330 dsPieceDataTable_FindById
+0209f38c dsPieceDataTable_GetById
+0209fa5c dsTrackInfo_SetAuthorTime
+0209fd2c dsTrack_ReadSceneHeader     # Environment/TimeOfDay/LapCount/AuthorTime of a scene (front end)
+
+# ---- race loading (main) ----
+02099e6c dsRaceLoader_Start           # collects the asset list, creates the piece table and loads it
+02099c6c dsRaceLoader_UpdateWireless  # download-play asset transfer state machine
+0209947c dsRaceLoader_ReadSharedAsset # "_dup.h" -> ".h" for shared tracks
+02099ae4 dsRaceLoader_OnAssetRequest
+02098aac dsTrackLighting_ListKeys
+
+# ---- track (ov003) ----
+ov003:021139cc dsRace_LoadTrack
+ov003:0211b404 dsTrack_LoadScene
+ov003:0211b11c dsTrack_ListSceneAssets
+ov003:0211a1f0 dsTrack_LoadPacked       # editor/shared tracks, bit-packed pieces
+ov003:02119874 dsTrack_AddPieceAssets
+ov003:0211c5d4 dsTrackLighting_Load
+ov003:0212090c dsTrackPiece_ctor
+ov003:0211fe08 dsTrackPiece_SetPosition
+ov003:0211f088 dsTrackPiece_UpdateTransform
+ov003:0211f2f0 dsTrackPiece_CreateModel
+ov003:0211eac0 dsTrackPiece_CreateArch
+ov003:0211e74c dsTrackPiece_CreateHelper
+ov003:02100d7c dsTerrainFilter_ctor
+ov003:02100438 dsTerrainFilter_IsTerrainPiece
+ov003:02100b2c dsTerrain_Build
+
+# ---- collision ----
+0205b624 dsCollisionWorld_ctor        # singleton *0x020c8e78, vtable 0x020bd390
+0205b4bc dsCollisionWorld_CreatePlane # vtable +0x10
+0205b46c dsCollisionWorld_CreateMesh  # vtable +0x14 (name, flags): shared mesh resource + shape
+0205b40c dsCollisionWorld_CreateMeshAt # vtable +0x18
+0205b3c0 dsCollisionWorld_TestPair
+0205b510 dsCollisionPlane_ctor
+0205b19c dsCollisionPlane_TestSegment
+02067e20 dsCollisionMeshShape_ctor
+02066078 dsCollisionMesh_ctor
+02066330 dsCollisionMesh_Create
+02065c04 dsCollisionMesh_Load
+02065804 dsCollisionMesh_ComputeNormals
+02065b2c dsCollisionMesh_GatherCell
+0206614c dsCollisionMesh_GatherSegment
+02073500 dsCollisionGrid_Init
+02068d08 dsPlane_IntersectSegment
+02068d9c dsPlane_IntersectRay
+02068ebc dsVec_Scale
+0202c4c4 FX_DivFx64c
+0202c500 FX_InvFx64c
+02013ff8 _ll_mul
+01ffe3ec dsGrid_TraverseSegment
+01ffb61c dsCollisionWorld_TestShape
+01ffb478 dsCollisionWorld_AddSegment
+01ffb28c dsCollisionWorld_TestSegments
+01ffb1dc dsCollisionWorld_TestShapeAll
+01ffb144 dsCollisionWorld_AddShape
+01ffb034 dsCollisionWorld_RemoveShape
+
+# ---- Firebrand math (ITCM) ----
+01ffa6ec dsMtx43_Copy
+01ffa708 dsMtx43_Identity
+01ffa8a4 dsVec_MulMtx33
+01ffaa58 dsVec_Mag
+01ffaac0 dsVec_Normalize
+01ffa730 dsMtx43_RotateAxis
+0205ad60 dsRandom_Next
+02069154 dsLuaObject_FieldString
+020691a0 dsLuaObject_IndexString
