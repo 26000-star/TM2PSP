@@ -1,0 +1,20 @@
+# --- Copyrighted game data: never commit ---
+*.nds
+*.srl
+*.sdat
+*.mob
+*.zip
+/extract/
+/assets/
+
+# --- Generated / local ---
+/build/
+/ghidra/
+*.gpr
+*.rep/
+*.lock
+*.lock~
+__pycache__/
+*.pyc
+.vscode/
+.idea/

@@ -1,0 +1,4 @@
+# dsd configs and tool scripts are read by Unix-style parsers: keep LF everywhere.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
