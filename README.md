@@ -12,6 +12,9 @@ No game data lives in this repository. You need your own dump of the ROM.
 | `extract/` | `dsd rom extract` output: ARM9/ARM7 binaries, ITCM/DTCM, overlays, files | no |
 | `config/` | `dsd init` output: per-module `symbols.txt`, `relocs.txt`, `delinks.txt` | yes |
 | `tools/ghidra/` | Headless Ghidra scripts (dsd import, stats) | yes |
+| `config/names/` | Function names recovered by hand, applied to `symbols.txt` | yes |
+| `src/` | The port: `game/` (decompiled code), `shim/` (NitroSDK replacement), `lib/` (Lua 5.0.2, unzip), `host/` | yes |
+| `docs/` | `PORT.md` (port architecture), `ASSETS.md` (data formats) | yes |
 | `ghidra/` | Ghidra project `tmturbo` | no |
 | `build/` | Logs and generated reports | no |
 
@@ -125,4 +128,38 @@ See [docs/ASSETS.md](docs/ASSETS.md). In short:
 
 ```bash
 wsl -d Ubuntu-24.04 -u root -- bash -lc "psp-gcc --version"
+```
+
+## Phase 3: host port (in progress)
+
+See [docs/PORT.md](docs/PORT.md) for the architecture, the build, the function tracking and the findings.
+In short:
+- C++ port built with CMake: `src/game` (decompiled code, each function tagged `@port <module>:<addr> <status>`),
+  `src/shim` (NitroSDK API on stdio now, SDL2/OpenGL next, PSP in phase 4), `src/lib` (Lua 5.0.2 with integer
+  numbers, unzip API on zlib).
+- **Race-mode inventory** (`tools/analysis/callgraph.py race`, from dsd relocations including vtables): 4,200 game
+  functions, 816 SDK, 314 Lua, 161 MSL, 48 zlib/unzip, 230 network to stub. Static reachability keeps almost all of
+  main + ov003, so a dynamic trace is the next step to rank them.
+- **First slice runs on the host:** the VFS (`vfs.zip` + the `vfs.bin` directory tree), Firebrand's Lua layer and the
+  ov003 car parameter loader. All 4,258 VFS files read back identical, and the 4 cars' 320 values match the unluac
+  decompilation.
+
+```bash
+cmake -S . -B build/host -G Ninja
+```
+
+```bash
+cmake --build build/host
+```
+
+```bash
+build/host/tm_cfgdump --root extract/files --carparams > build/host/carparams.txt
+```
+
+```bash
+python -P tools/host/check_carparams.py build/host/carparams.txt
+```
+
+```bash
+python -P tools/analysis/port_status.py --race-only
 ```

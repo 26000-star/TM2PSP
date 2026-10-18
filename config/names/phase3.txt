@@ -1,0 +1,131 @@
+# Names recovered while decompiling the phase 3 slice (VFS, Lua config loading, car parameters).
+# Applied to config/arm9/**/symbols.txt with: python -P tools/analysis/apply_names.py config/names/*.txt
+# Convention: Class_Method (dsd symbols cannot contain "::"); _ctor / _dtor / _dtor_deleting for C++ special members.
+
+# ---- file system (main) ----
+0206d904 dsFileSystem_Create          # creates the singleton (*0x020c8de4) and the loader-thread queue
+0206dd80 dsFileSystem_ctor
+0206db8c dsFileSystem_dtor
+0206d994 dsFileSystem_dtor_deleting
+0206d790 dsFileSystem_Open            # vtable +0x00
+0206d67c dsFileSystem_Exists          # +0x04
+0206d560 dsFileSystem_GetSize         # +0x08
+0206d41c dsFileSystem_EnableVfs       # +0x0c
+0206c884 dsFileSystem_IsVfsEnabled    # +0x10
+0206d46c dsFileSystem_MountArchive    # +0x14 ("HRZ" NNS archive)
+0206d44c dsFileSystem_GetArchiveFile  # +0x18
+0206d078 dsFileSystem_QueueLoad       # +0x1c (loader thread request)
+0206d4bc dsFileSystem_SetMemoryFile   # +0x2c
+0206d49c dsFileSystem_ClearMemoryFile # +0x30
+0206d24c dsFileSystem_List            # +0x34
+0206d2b4 dsFileSystem_LoadVfs         # vfs.zip + vfs.dat + vfs.bin
+0206d294 dsFileSystem_FindVfsEntry
+0206d274 dsFileSystem_VfsOffsets
+0206cbe8 dsFileSystem_YieldToLoader
+0206e2d4 dsPackedFile_ctor
+0206e2b0 dsPackedFile_dtor
+0206e27c dsPackedFile_dtor_deleting
+0206e0d0 dsPackedFile_IsOpen
+0206e12c dsPackedFile_Read
+0206e0d4 dsPackedFile_Write
+0206e114 dsPackedFile_Close
+0206e0d8 dsPackedFile_GetSize
+0206e1b4 dsPackedFile_SizeOf
+0206e23c dsPackedFile_Exists
+0206e538 dsRawFile_ctor
+0206e514 dsRawFile_dtor
+0206e4e0 dsRawFile_dtor_deleting
+0206e398 dsRawFile_IsOpen
+0206e3b8 dsRawFile_Read
+0206e39c dsRawFile_Write
+0206e3d4 dsRawFile_Close
+0206e3a4 dsRawFile_GetSize
+0206e3ec dsRawFile_SizeOf
+0206e480 dsRawFile_Exists
+0207e1fc dsMemoryFile_ctor
+0207e1d4 dsMemoryFile_dtor
+0207e1a4 dsMemoryFile_dtor_deleting
+0207e134 dsMemoryFile_IsOpen
+0207e13c dsMemoryFile_Read
+0207e16c dsMemoryFile_Write
+0207e19c dsMemoryFile_Close
+0207e138 dsMemoryFile_GetSize
+0207a30c dsVfsIndex_ctor
+0207a24c dsVfsIndex_Find
+0207a0b8 dsVfsIndex_List
+0207a0a0 dsVfsIndex_SetNumNodes
+0207a09c dsVfsIndex_SetNumFiles
+0207a098 dsVfsIndex_SetStringBytes
+0207a0a4 dsVfsIndex_OffsetSize
+0207a0a8 dsVfsIndex_NodeSize
+0207a0ac dsVfsIndex_Strings
+0207a0b0 dsVfsIndex_Offsets
+0207a0b4 dsVfsIndex_Nodes
+
+# ---- unzip 0.15 + Firebrand additions (main) ----
+02023698 unzOpen
+0202364c unzClose
+02022f34 unzGetOffsetCentralDir
+02023348 unzGoToFilePos
+02023388 unzGetCurrentFileInfo
+020233b4 unzlocal_GetCurrentFileInfoInternal
+020230f4 unzOpenCurrentFile
+02022f8c unzReadCurrentFile
+02022f38 unzCloseCurrentFile
+0202367c unzDup
+02023620 unzFreeDup
+02023a88 unz_fseek                    # FSFile seek wrapper (file, pos, origin)
+020239cc unz_fread                    # FSFile read wrapper (file, buf, size, unused)
+02021d7c inflate
+02022a68 inflateInit2_
+
+# ---- Lua wrapper (main) ----
+02054d0c dsLuaState_ctor
+02054cd4 dsLuaState_dtor
+02054c94 dsLuaState_dtor_deleting
+02054c40 dsLuaState_Close
+02054bec dsLuaState_Run
+02054bb4 dsLuaState_GetGlobal
+02054ba8 dsLuaState_CollectGarbage
+02054ba4 dsLuaState_Panic
+020572b0 dsScript_Load
+0205c838 dsScriptManager_Run
+0205ccd8 dsScriptManager_ctor
+0205ce70 dsScriptCache_Get
+0205c9dc dsScriptCache_Acquire
+0205c920 dsScriptCache_ReleaseEntry
+0205ce44 dsScriptCache_Entry
+02068f28 dsLuaObject_TypeOfTop
+020694b4 dsLuaObject_ctor_stack
+02069450 dsLuaObject_ctor_copy
+0206949c dsLuaObject_dtor
+02069410 dsLuaObject_ToString
+02069300 dsLuaObject_Count
+02069050 dsLuaObject_Field
+020692d0 dsLuaObject_HasField
+020691e4 dsLuaObject_FieldNumber
+02069230 dsLuaObject_IndexNumber
+02069274 dsLuaObject_Value
+02068fe4 dsLuaObject_Begin
+02068f74 dsLuaObject_Next
+02069440 dsLuaObject_IsNil
+02044258 dsStringIdA_ctor
+020442cc dsStringIdA_Release
+0204422c dsStringIdA_c_str
+020444b4 dsStringIdB_ctor
+02044304 dsStringIdB_Assign
+02044528 dsStringIdB_Release
+0202c4f0 FX_Inv
+
+# ---- car parameters (ov003) ----
+ov003:0212bed0 dsCarParamsTable_Load
+ov003:0212c47c dsCarParamsTable_Clear
+ov003:0212c2c8 dsCarParamsTable_Get
+ov003:0212c504 dsCarParamsMap_FindInsertPos
+ov003:0212c87c dsCarParamsMap_InsertNode
+ov003:0212ddd8 dsCarParams_ctor
+ov003:0212da88 dsCarParams_ctor_copy
+ov003:0212cc58 dsCarParams_Load
+ov003:0212cd74 dsCarParams_RegisterParams
+ov003:0212cbb8 dsCarParams_RegisterParam
+ov003:0212c9ec dsCarParams_ComputeDerived
