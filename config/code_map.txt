@@ -8,8 +8,8 @@ arm9_main 02000800 02003000 crt0         replace # Entry, AutoloadCallback, init
 arm9_main 02003000 02003430 game         port    # main()
 arm9_main 02003430 0201201c network      drop    # Ubiquitous CPS/SSL, NitroWiFi 2.1, DWC 3.1 auth/http: [SDK+UBIQUITOUS:*], nas.nintendowifi.net
 arm9_main 0201201c 020211e8 msl          replace # CodeWarrior MSL C/C++: memcpy (244 callers), printf float formatting, std::string/vector, exceptions
-arm9_main 020211e8 02023c84 zlib_unzip   replace # zlib "1.2.2" inflate + "unzip 0.15 Copyright 1998 Gilles Vollant"
-arm9_main 02023c84 0203ad78 nitro        replace # NitroSDK 4.2 + NitroSystem (ARM): OS/MI/IRQ/timer/PXI/GX/G2/G3/CP; NNS G2D ('CHAR','PLTT','CEBK')
+arm9_main 020211e8 02023ac0 zlib_unzip   replace # zlib "1.2.2" inflate + "unzip 0.15 Copyright 1998 Gilles Vollant"
+arm9_main 02023ac0 0203ad78 nitro        replace # NitroSystem fnd/g2d/gfd + NitroSDK 4.2 (ARM): OS/MI/IRQ/timer/PXI/GX/G2/G3/CP; NNS G2D ('CHAR','PLTT','CEBK')
 arm9_main 0203ad78 02041fe0 lua          replace # Lua 5.0.2 core + lauxlib + base/coroutine/table/math libs (luaL_reg tables at 020b8c00..)
 arm9_main 02041fe0 020435cc nitro        replace # NitroSDK CARD/BACKUP ([SDK+NINTENDO:BACKUP]), FS
 arm9_main 020435cc 020b2a80 game         port    # Firebrand engine + game: track pieces, cars, HUD, menus, modes, Lua table readers

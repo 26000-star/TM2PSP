@@ -70,6 +70,11 @@ Findings:
 - **The Lua scripts are pure data** (182 chunks, no function calls). The engine reads globals such as `carParams`, `Track`, `PieceData`, `tracks`, `credits` and `rewardShop` through about 60 call sites in total (`lua_rawgeti`, `lua_gettable`, `lua_next`, `luaL_ref`...). The Lua parser is not even linked, since the game only loads bytecode. Decompiled sources go to `assets/lua_src/` (git-ignored).
 - **Lua 5.0.2: 305 of 320 functions named**, plus Firebrand's fixed-point math library (`fxmath_*`). Consistency check: 799 matched call edges agree with the source call graph, 6 do not (self-recursion and one Firebrand-modified function). 21 of the 22 Lua functions the game calls are named.
 - CodeWarrior detail used for the matching: within each source file, **functions are emitted in reverse definition order**.
+- **NitroSDK / NitroSystem: 735 of 938 library functions named**, plus 110 data symbols. Method: `ntrtwl/NitroSDK` (4.2.30001; the game has 4.2.30009) and `ntrtwl/NitroSystem` (071126) are built with the original CodeWarrior compiler (`mid-kid/metroskrew` 0.1.3, `-wrap:sdk 2.0/sp2p2`, same setup as the pret decomps; used locally for analysis only). Then 684 functions match **byte for byte** with relocated words masked, and 178 more names come from the matched functions' relocations. A source-only attempt (call graph + register sets, no compiler) found 26.
+  - **Game → SDK boundary: the game calls 319 SDK/ITCM functions, 252 of them named (79%)**, which covers 895 of 1,173 call sites. This is the surface the PSP shim must implement. The main families are SND 38, OS 36, NNS (G2D/Fnd/Gfd) 21, GX 19, MTX 12, FS 11, TP 10 and FX 10. WM 37 and VIB 5 belong to local wireless and the rumble pak, so they get stubbed.
+  - **NitroSystem G3D is not used** (3 helper matches only) and neither is the NNS sound player. Firebrand has its own 3D engine: it parses BMD0 itself and drives the GPU through G3 commands. It is part of the code to port, and its G3 output will map onto `sceGu`.
+  - The most-called unnamed functions are Firebrand math routines in ITCM (`0x01FFA6EC` copies a 4×3 matrix, `0x01FFA708` loads the 4×3 identity, `0x01FFAAC0` normalizes a vector with the hardware divider/sqrt).
+- Game subsystem map (heuristic, from SDK-call families + strings, smoothed by address): `python -P tools/analysis/game_modules.py` → `build/analysis/game_modules.txt`. For example, ov003 holds car audio (`config/caraudio`), cameras (`config/cameras`), car loading (`Cars/%s/%d/lod%d`, wheels), particles, track triggers (`ChallengeFinishLine`, `CarCamTrigger`), HUD, ghosts and hot seat.
 
 Analysis pipeline (after `tools/ghidra/analyze.ps1`):
 
@@ -89,6 +94,10 @@ python -P tools/analysis/code_map.py
 bash tools/analysis/lua_names.sh
 ```
 
+```bash
+bash tools/analysis/sdk_names.sh
+```
+
 | Script | Role |
 |---|---|
 | `tools/ghidra/ExportAnalysis.java` | per-function JSON Lines: callees, strings, I/O registers, function pointers |
@@ -97,6 +106,9 @@ bash tools/analysis/lua_names.sh
 | `tools/analysis/classify.py`, `window.py` | evidence tags and address-window listings used to place library boundaries |
 | `tools/analysis/code_map.py` | applies `config/code_map.txt`, per-library totals |
 | `tools/analysis/align_lib.py`, `match_lib.py` | names a library from its source: anchors + order alignment + call-graph propagation |
+| `tools/analysis/sig_match.py` | names library functions by masked byte signatures from ELF objects, plus their relocation targets |
+| `tools/analysis/sdk_names.sh` | builds NitroSDK + NitroSystem with metroskrew, then runs `sig_match.py` and `apply_names.py` |
+| `tools/analysis/game_modules.py` | heuristic subsystem map of the ported game code |
 | `tools/analysis/apply_names.py` | writes names into dsd `symbols.txt` (placeholders only) |
 
 After renaming, rerun `analyze.ps1` so Ghidra picks up the names.

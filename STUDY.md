@@ -115,7 +115,7 @@ My recommendation: (b) now, try (a) as a quick test.
 | Target | Tool |
 |---|---|
 | Emulator | **PPSSPP** 1.20.4 (Windows x64, 20 MB): CPU debugger, GE debugger (frame dump), memory view |
-| Real hardware | PSP on CFW (ARK-4, or PRO-C/LME on 6.61). Copy `PSP/GAME/TM2PSP/EBOOT.PBP` to the Memory Stick, debug over PSPLink |
+| Real hardware | **Target unit: PSP-3000, 6.61, LME 2.3 + Infinity (permanent CFW), 64 MB RAM.** Copy `PSP/GAME/TM2PSP/EBOOT.PBP` to the Memory Stick and debug over PSPLink (psplinkusb). Use the extended user memory (`MEMSIZE=1` in PARAM.SFO), about 52 MB of heap. The 32 MB PSP-1000 is a stretch goal |
 | ISO (optional) | Lay out a UMD tree (`PSP_GAME/SYSDIR/EBOOT.BIN`, `PARAM.SFO`, `USRDIR/`), sign it, build with `mkisofs`/UMDGen. CFW runs it. EBOOT.PBP comes first |
 
 ## 5. Proposed phases (not started)

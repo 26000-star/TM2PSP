@@ -53,7 +53,7 @@ data_027e0504 kind:bss addr:0x027e0504
 data_027e0508 kind:bss addr:0x027e0508
 data_027e050c kind:bss addr:0x027e050c
 data_027e0510 kind:bss addr:0x027e0510
-data_027e0598 kind:bss addr:0x027e0598
+OSi_IrqThreadQueue kind:bss addr:0x027e0598
 data_027e05a0 kind:bss addr:0x027e05a0
 data_027e05a4 kind:bss addr:0x027e05a4
 data_027e05a8 kind:bss addr:0x027e05a8
