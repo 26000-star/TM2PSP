@@ -303,6 +303,19 @@ and then reverses. Two runs give identical output.
   (main 0x0208d404): the port takes it as a callback (`pieceRotationAt`), served by `dsTrack::PieceRotationAt`,
   which walks the piece footprints instead of keeping the game's per-cell byte grid (partial).
 
+## Coast/Island terrain (ov003 0x02100998, 0x02100480, 0x02100750, 0x02100554)
+
+`dsTrack::BuildTerrain` recreates the cliffs and beaches the scene loader skips. For every grid cell of the
+ground level (3) that is empty and has a "solid" piece in its 3 x 3 neighbourhood (a placed, non-terrain piece,
+not BelowGnd, with a ground model), the 3 x 3 solid mask is matched against 15 patterns (ov003 0x02134e8c: 0/1 or
+0xff = any, centre byte = terrain kind) under the four quarter turns (index tables 0x02134e68); the first match
+gives the piece (Coast: wcliffcorner, wcliffdeadend02, wcliffbase1a (base rotation 3), wcliffbase1a,
+dcliffcrossa, wcliffbase5; table 0x02135bcc) and rotation = base + turn. Pieces stand at (x * 16, 0.35, z * 16).
+`tm_trackdump --terrain` + `tools/host/check_terrain.py` (patterns and names read from the ROM, scene and
+catalogue from the unluac output): **26 Coast tracks, 0 errors** (44 to 100 terrain pieces each). The editor
+path (piece budget, replacing earlier terrain pieces) is not ported. Grid lookups walk piece footprints
+(`dsTrack::PieceAtCell`, stand-in for main 0x0208d3c4).
+
 ## Slice 4a: host race window (first pass)
 
 `tm_race --root extract/files [--track easy/0]` opens an SDL2 window (768 x 576) and runs the ported code at 30 Hz:
@@ -328,15 +341,15 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
   (body 2.6 high at up_scale 2), so tm_race does not draw wheels yet.
 - Respawn stand-in: one second below the sea level (or the car's stuck flag) puts the car back on the start.
 - Not ported yet (stand-ins in tm_race): main loop/race manager (`main()` 0x02003000), cameras (`config/cameras`,
-  a fixed chase view here), DS lighting/fog/toon (flat GL colours), the Coast terrain builder (cliffs and beaches
-  are missing, the sea is a flat quad at 2.5), wheels, HUD, checkpoints/laps, sound.
+  a fixed chase view here), DS lighting/fog/toon (flat GL colours), sky and sea (a flat quad at 2.5), wheels, HUD,
+  checkpoints/laps, sound. tm_race builds the terrain before the collision world.
 
 ## Next slices
 
 1. **Cameras** (`config/cameras`), the race grid itself (main 0x0208cb80 + the per-cell bytes), car/car
    contacts (the +0x248 sums), and a dynamic trace of `dsCarDynamics_Step` in melonDS to compare the port bit for
    bit (the drop test only checks behaviour).
-2. Terrain builder (ov003 0x02100b2c and callees) so Coast cliffs and beaches exist for collision and display.
+2. Checkpoints, laps and finish: the pieces' triggers (TriggerSize) and the race manager (*0x0210fe40 in ov003).
 3. Renderer, faithful pass: Firebrand's model drawing (dsModel, visual update 0x02126d10 for wheels/shadow),
    DS lighting from `config/tracks` (the eight colours), sky and sea from the environment loader (main
    0x02099e6c), then the same G3 path on the PSP (TMPM from phase 2).

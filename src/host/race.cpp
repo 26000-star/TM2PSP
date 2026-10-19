@@ -160,6 +160,8 @@ bool Race::Load(const char *trackName)
         fprintf(stderr, "cannot load scene %s\n", scene.c_str());
         return false;
     }
+    int terrain = track.BuildTerrain();
+    printf("terrain: %d pieces\n", terrain);
     for (dsTrackPiece *p : track.pieces)
         p->CreateCollision();
     table.Load();

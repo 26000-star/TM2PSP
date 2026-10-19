@@ -46,6 +46,7 @@ public:
     bool cullable = true;       // +0x60
     u8 rotation;                // +0x74 quarter turns around Y
     bool air = false;           // +0x76 uses the "air" model (above the ground level)
+    bool autoTerrain = false;   // +0x7a placed by the terrain builder
     std::string modelPath;      // +0x0c "Tracks/<env>/<model name>" (collision: graphics/<path>.h)
     MtxFx43 matrix;             // model +0x20: rotation, and translation = pos moved to the footprint corner
     class dsCollisionMeshShape *collision = nullptr; // +0x7c
@@ -65,6 +66,11 @@ public:
     // the port walks the footprints instead of keeping the grid (W x D cells towards -x and +z of the origin
     // cell, swapped for odd rotations, H cells up).
     int PieceRotationAt(const VecFx32 &pos) const;
+    // Piece covering grid cell (x, y, z), NULL when none (same footprint walk; grid lookup main 0x0208d3c4).
+    dsTrackPiece *PieceAtCell(s32 x, s32 y, s32 z) const;
+    // Coast/Island terrain: cliff and beach pieces around the ground-level pieces (dsTerrain_Build with no
+    // piece, ov003 0x02100998). New pieces are appended with autoTerrain set; returns how many.
+    int BuildTerrain();
 
     dsTrackInfo info;
     std::vector<dsTrackPiece *> pieces;
@@ -77,8 +83,12 @@ public:
     explicit dsTerrainFilter(s32 env);                 // ov003 0x02100d7c
     bool IsTerrainPiece(u32 id) const;                 // ov003 0x02100438
     bool Active() const { return m_active; }
+    // ov003 0x02100998 / 0x02100480 / 0x02100750 / 0x02100554, see dsTrack::BuildTerrain.
+    int Build(dsTrack &t) const;
 
 private:
+    bool HasSolidNeighbour(const dsTrack &t, s32 x, s32 z) const;
+    bool IsSolid(const dsTrackPiece *p) const;
     bool m_active = false;      // +0x04: Coast or Island
     bool m_editor = false;      // +0x05: game mode 6 or 7
     s32 m_groundLevel = 0;      // +0x08

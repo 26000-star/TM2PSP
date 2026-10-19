@@ -1,5 +1,5 @@
 // Host test driver for the second vertical slice: track loading.
-//   tm_trackdump --root <dir> [--raw] [--env coa] [--track <difficulty>/<n>] [--pieces] [--collision] [--lighting]
+//   tm_trackdump --root <dir> [--raw] [--env coa] [--track <difficulty>/<n>] [--pieces] [--collision] [--lighting] [--terrain]
 // Loads PieceData/<env>/PieceData like the race loader, then the scene <env>/<difficulty>/<n> (default easy/0)
 // like ov003 0x0211b404, and prints the piece catalogue, the track header, every placed piece and, with
 // --collision, the collision mesh of every model the track uses. tools/host/check_track.py checks the output.
@@ -80,7 +80,7 @@ static void DumpMesh(const std::string &model)
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *envName = "coa", *track = "easy/0";
-    bool raw = false, pieces = false, collision = false, lighting = false;
+    bool raw = false, pieces = false, collision = false, lighting = false, terrain = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -94,6 +94,8 @@ int main(int argc, char **argv)
             pieces = true;
         else if (!strcmp(argv[i], "--collision"))
             collision = true;
+        else if (!strcmp(argv[i], "--terrain"))
+            terrain = true;
         else if (!strcmp(argv[i], "--lighting"))
             lighting = true;
         else {
@@ -141,6 +143,17 @@ int main(int argc, char **argv)
         for (int r = 0; r < 4; r++)
             printf("%d,%d,%d%s", p->matrix.m[r][0], p->matrix.m[r][1], p->matrix.m[r][2], r < 3 ? ";" : "\n");
         models.insert(p->modelPath);
+    }
+    if (terrain) {
+        size_t first = t.pieces.size();
+        t.BuildTerrain();
+        printf("terrain %d\n", (int)(t.pieces.size() - first));
+        for (size_t i = first; i < t.pieces.size(); i++) {
+            const dsTrackPiece *p = t.pieces[i];
+            printf("terrainpiece %d %s rot=%u cell=%d,%d,%d pos=%d,%d,%d model=%s\n", p->id,
+                   p->info ? p->info->name.c_str() : "?", p->rotation, p->cell[0], p->cell[1], p->cell[2], p->pos.x,
+                   p->pos.y, p->pos.z, p->modelPath.c_str());
+        }
     }
     if (collision)
         for (const std::string &m : models)

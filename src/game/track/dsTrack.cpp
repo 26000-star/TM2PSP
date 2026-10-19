@@ -40,7 +40,7 @@ void dsTrackInfo::SetAuthorTime(fx32 t)
     }
 }
 
-// @port ov003:02100d7c partial (the cell and size fields only feed the terrain builder, not ported yet)
+// @port ov003:02100d7c done
 dsTerrainFilter::dsTerrainFilter(s32 env)
 {
     const dsRaceSetup *setup = dsRaceSetup::Get();
@@ -252,4 +252,108 @@ int dsTrack::PieceRotationAt(const VecFx32 &p) const
             return pc->rotation;
     }
     return -1;
+}
+
+// @port main:0208d3c4 partial (footprint walk instead of the grid bytes, see dsTrack.h)
+dsTrackPiece *dsTrack::PieceAtCell(s32 x, s32 y, s32 z) const
+{
+    for (dsTrackPiece *pc : pieces) {
+        int w = 1, d = 1, h = 1;
+        if (pc->info) {
+            w = pc->info->width;
+            d = pc->info->depth;
+            h = pc->info->height;
+        }
+        if (pc->rotation & 1)
+            std::swap(w, d);
+        if (x <= pc->cell[0] && pc->cell[0] - w < x && pc->cell[2] <= z && z < pc->cell[2] + d &&
+            pc->cell[1] <= y && y < pc->cell[1] + h)
+            return pc;
+    }
+    return nullptr;
+}
+
+int dsTrack::BuildTerrain()
+{
+    dsTerrainFilter f(info.environment);
+    return f.Build(*this);
+}
+
+// 3 x 3 neighbourhoods (index (dz + 1) * 3 + dx + 1, 1 = solid piece, 0xff = any) and the terrain piece kind in
+// the centre byte; tried in order, each under the four quarter turns (ov003 0x02134e8c, 0x02134e68).
+static const u8 s_terrainPatterns[15][9] = {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0},       {0, 0, 1, 0, 0, 0, 0, 0, 0},       {255, 1, 255, 0, 1, 0, 0, 0, 0},
+    {1, 0, 1, 0, 1, 0, 0, 0, 0},       {255, 1, 255, 0, 2, 1, 0, 0, 255}, {255, 1, 1, 0, 2, 0, 0, 0, 1},
+    {1, 0, 1, 0, 2, 1, 0, 0, 255},     {1, 255, 255, 0, 2, 1, 0, 0, 255}, {0, 1, 0, 0, 2, 0, 0, 0, 1},
+    {1, 0, 1, 1, 2, 0, 1, 0, 0},       {1, 0, 1, 0, 3, 0, 1, 0, 0},       {1, 0, 0, 0, 3, 0, 1, 0, 1},
+    {255, 1, 0, 0, 2, 0, 0, 0, 255},   {0, 0, 1, 0, 5, 0, 1, 0, 0},       {255, 255, 255, 255, 4, 255, 255, 255, 255}};
+static const u8 s_terrainTurns[4][9] = {
+    {0, 1, 2, 3, 4, 5, 6, 7, 8}, {6, 3, 0, 7, 4, 1, 8, 5, 2}, {8, 7, 6, 5, 4, 3, 2, 1, 0}, {2, 5, 8, 1, 4, 7, 0, 3, 6}};
+
+// A placed piece that counts as land: not terrain, not below the ground, with a ground model.
+bool dsTerrainFilter::IsSolid(const dsTrackPiece *p) const
+{
+    return p && !p->autoTerrain && p->info && !p->info->belowGround && !p->info->ground.empty();
+}
+
+// @port ov003:02100480 done
+bool dsTerrainFilter::HasSolidNeighbour(const dsTrack &t, s32 x, s32 z) const
+{
+    s32 x0 = x < 1 ? 0 : x - 1, z0 = z < 1 ? 0 : z - 1;
+    s32 x1 = x < (s32)m_grid[0] - 1 ? x + 1 : x, z1 = z < (s32)m_grid[2] - 1 ? z + 1 : z;
+    for (s32 i = x0; i <= x1; i++)
+        for (s32 k = z0; k <= z1; k++)
+            if (IsSolid(t.PieceAtCell(i, m_groundLevel, k)))
+                return true;
+    return false;
+}
+
+// @port ov003:02100998 partial (race path: the editor's piece budget checks and the removal of earlier terrain
+// pieces, which do not exist after a scene load, are left out)
+// @port ov003:02100750 partial (no existing terrain piece to replace in the race path)
+// @port ov003:02100554 done
+int dsTerrainFilter::Build(dsTrack &t) const
+{
+    if (!m_active)
+        return 0;
+    int added = 0;
+    for (s32 x = 0; x < (s32)m_grid[0]; x++)
+        for (s32 z = 0; z < (s32)m_grid[2]; z++) {
+            dsTrackPiece *cur = t.PieceAtCell(x, m_groundLevel, z);
+            if ((cur && !cur->autoTerrain) || !HasSolidNeighbour(t, x, z))
+                continue;
+            u8 mask[9] = {};
+            int k = 0;
+            for (s32 dz = -1; dz <= 1; dz++)
+                for (s32 dx = -1; dx <= 1; dx++, k++) {
+                    s32 i = x + dx, j = z + dz;
+                    if (i >= 0 && j >= 0 && i < (s32)m_grid[0] && j < (s32)m_grid[2] &&
+                        IsSolid(t.PieceAtCell(i, m_groundLevel, j)))
+                        mask[k] = 1;
+                }
+            bool found = false;
+            u32 id = 0, rot = 0;
+            for (int pat = 0; !found && pat < 15; pat++) {
+                const u8 *lp = s_terrainPatterns[pat];
+                for (int r = 0; !found && r < 4; r++) {
+                    found = true;
+                    u32 v = m_ids[lp[4]];
+                    id = v & 0xffff;
+                    rot = ((v >> 16) & 0xff) + r;
+                    for (int i = 0; i < 9; i++)
+                        if (lp[i] != 0xff && mask[s_terrainTurns[r][i]] != lp[i] && i != 4) {
+                            found = false;
+                            break;
+                        }
+                }
+            }
+            if (!found || (cur && id == (u32)cur->id))
+                continue;
+            VecFx32 pos = {dsRoundD((x * m_cell[0]) << 12), 0x59a, dsRoundD((z * m_cell[0]) << 12)};
+            dsTrackPiece *p = new dsTrackPiece((s32)id, pos, (u8)(rot & 3));
+            p->autoTerrain = true;
+            t.pieces.push_back(p);
+            added++;
+        }
+    return added;
 }
