@@ -341,6 +341,13 @@ int main(int argc, char **argv)
         in.steer = (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0);
         race.car->SetInput(in);
         race.car->Step();
+        // Stand-in for the race manager's respawn: one second below the sea level sends the car back to the start.
+        static int underwater = 0;
+        underwater = race.car->matrix.m[3][1] < race.car->minHeight ? underwater + 1 : 0;
+        if (underwater > 30) {
+            underwater = 0;
+            race.Restart();
+        }
         if (race.car->respawnRequest) {
             race.car->respawnRequest = false;
             race.Restart();

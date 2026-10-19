@@ -323,8 +323,10 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
 - Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread, the shadow quads and a
   large "cone" shape. The visual update (0x02126d10: steering angle WheelTurnVisual x steer x the steer scale,
   wheel spin, wheel surfaces, per-wheel matrices `wheelMatrix`/`wheelSideMatrix` from the display matrix +0x1f0)
-  is ported; drawing the lod0 wheels with them still needs the car model's placement code (ov003 0x020fbe48,
-  0x020fbe38, model fields +0xf0..+0x107), so tm_race does not draw wheels yet.
+  is ported. 0x020fbe48 only stores these matrices in the car model (0xa8 bytes per wheel, matrices at +0xc and
+  +0x3c); the drawing code that uses them is not found yet, and lod0's shapes do not match the lod1 scale
+  (body 2.6 high at up_scale 2), so tm_race does not draw wheels yet.
+- Respawn stand-in: one second below the sea level (or the car's stuck flag) puts the car back on the start.
 - Not ported yet (stand-ins in tm_race): main loop/race manager (`main()` 0x02003000), cameras (`config/cameras`,
   a fixed chase view here), DS lighting/fog/toon (flat GL colours), the Coast terrain builder (cliffs and beaches
   are missing, the sea is a flat quad at 2.5), wheels, HUD, checkpoints/laps, sound.
