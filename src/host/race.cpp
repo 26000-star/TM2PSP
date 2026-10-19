@@ -13,8 +13,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <map>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,56 +22,11 @@
 #endif
 #include <GL/gl.h>
 
-#include "car/dsCarDynamics.h"
-#include "car/dsCarParams.h"
-#include "collision/dsCollisionWorld.h"
-#include "core/dsTime.h"
 #include "fs/dsFileSystem.h"
 #include "g3d_gl.h"
-#include "math/dsMath.h"
 #include "nitro.h"
+#include "race_session.h"
 #include "track/dsPieceData.h"
-#include "track/dsRaceSetup.h"
-#include "track/dsTrack.h"
-#include "race/dsChaseCamera.h"
-#include "race/dsRaceProgress.h"
-
-static bool ReadFile(const std::string &path, std::vector<u8> *out)
-{
-    dsFile *f = dsFileSystem::Get()->Open(path.c_str());
-    if (!f || !f->IsOpen()) {
-        delete f;
-        return false;
-    }
-    out->resize((size_t)f->GetSize());
-    bool ok = !out->empty() && f->Read(out->data(), (u32)out->size()) == (int)out->size();
-    delete f;
-    return ok;
-}
-
-static G3Model *LoadModel(const std::string &name)
-{
-    std::vector<u8> d;
-    if (!ReadFile("graphics/" + name + ".n", &d))
-        return nullptr;
-    G3Model *m = new G3Model;
-    if (!m->Load(d)) {
-        delete m;
-        return nullptr;
-    }
-    m->Upload();
-    return m;
-}
-
-// DS 4x3 matrix (row vectors, fx32) to a GL column-major matrix.
-static void GlMatrix(const MtxFx43 &m, float *g)
-{
-    for (int r = 0; r < 4; r++)
-        for (int c = 0; c < 3; c++)
-            g[r * 4 + c] = m.m[r][c] / 4096.0f;
-    g[3] = g[7] = g[11] = 0;
-    g[15] = 1;
-}
 
 static void LookAt(const float *eye, const float *at, const float *up)
 {
@@ -122,80 +75,7 @@ static bool SaveBmp(const char *path, int w, int h)
 
 static bool topView = false;
 
-struct Race {
-    dsTrack track;
-    dsCarParamsTable table;
-    dsCarModelGeometry geo;
-    std::unique_ptr<dsCarDynamics> car;
-    std::unique_ptr<dsRaceProgress> progress;
-    dsChaseCamera cams[2] = {dsChaseCamera(1), dsChaseCamera(2)}; // config/cameras Chase1 / Chase2
-    int camIndex = 0;
-    G3Model *batch = nullptr, *carModel = nullptr;
-    std::vector<std::pair<G3Model *, const dsTrackPiece *>> pieces;
-
-    bool Load(const char *trackName);
-    void Draw(int w, int h);
-};
-
-bool Race::Load(const char *trackName)
-{
-    dsRaceSetup *setup = dsRaceSetup::Get();
-    setup->mode = 1;
-    setup->SetEnvironment(ENV_COAST);
-    dsPieceDataTable::Get()->Load(ENV_COAST);
-    std::string scene = std::string("coa/") + trackName;
-    if (!track.LoadScene(scene.c_str(), true)) {
-        fprintf(stderr, "cannot load scene %s\n", scene.c_str());
-        return false;
-    }
-    int terrain = track.BuildTerrain();
-    printf("terrain: %d pieces\n", terrain);
-    for (dsTrackPiece *p : track.pieces)
-        p->CreateCollision();
-    table.Load();
-    if (table.All().find("coa") == table.All().end())
-        return false;
-    const dsCarParams &prm = table.Get("coa");
-    if (!geo.Load("coa", 0, prm))
-        return false;
-    car.reset(new dsCarDynamics("coa", &geo));
-    car->LoadParams(prm);
-    car->pieceRotationAt = [this](const VecFx32 &p) { return track.PieceRotationAt(p); };
-
-    // Start, triggers and countdown: the race mode's full reset (ov003 0x02115af4).
-    progress.reset(new dsRaceProgress(&track, car.get()));
-    progress->Reset(true);
-    if (!progress->startPiece) {
-        fprintf(stderr, "no start piece\n");
-        return false;
-    }
-    for (dsChaseCamera &c : cams) {
-        if (!c.Load("coa"))
-            fprintf(stderr, "config/cameras: no coa entry\n");
-        c.Reset();
-    }
-
-    batch = LoadModel("Tracks/coa/texturebatch");
-    std::vector<u8> mb;
-    if (batch && ReadFile("graphics/Tracks/coa/material.bin", &mb) && batch->LoadMaterialBin(mb))
-        batch->Upload();
-    std::map<std::string, G3Model *> cache;
-    for (const dsTrackPiece *p : track.pieces) {
-        auto it = cache.find(p->modelPath);
-        if (it == cache.end())
-            it = cache.emplace(p->modelPath, LoadModel(p->modelPath)).first;
-        if (it->second)
-            pieces.push_back({it->second, p});
-    }
-    // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
-    // places itself in the visual update 0x02126d10, not ported yet).
-    carModel = LoadModel("Cars/coa/0/lod1");
-    printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
-           batch ? "ok" : "missing", carModel ? "ok" : "missing");
-    return true;
-}
-
-void Race::Draw(int w, int h)
+static void DrawRace(RaceSession &race, int w, int h)
 {
     glViewport(0, 0, w, h);
     glClearColor(0.55f, 0.75f, 0.95f, 1);
@@ -203,7 +83,7 @@ void Race::Draw(int w, int h)
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     // The game camera's FOV (config/cameras, 70) is taken as the full vertical angle.
-    const dsChaseCamera &cam = cams[camIndex];
+    const dsChaseCamera &cam = race.cams[race.camIndex];
     float fovy = cam.fov / 4096.0f;
     float n = 0.25f, f = 600, t = n * tanf(fovy * 0.5f * 3.14159265f / 180), r = t * w / h;
     glFrustum(-r, r, -t, t, n, f);
@@ -217,7 +97,7 @@ void Race::Draw(int w, int h)
         up[i] = cm.m[1][i] / 4096.0f;
     }
     if (topView) {
-        const MtxFx43 &m = car->matrix;
+        const MtxFx43 &m = race.car->matrix;
         float pos[3] = {m.m[3][0] / 4096.0f, m.m[3][1] / 4096.0f, m.m[3][2] / 4096.0f};
         float fwd[3] = {m.m[2][0] / 4096.0f, 0, m.m[2][2] / 4096.0f};
         float fl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
@@ -248,62 +128,24 @@ void Race::Draw(int w, int h)
     glVertex3f(800, 2.5f, -500);
     glEnd();
     float g[16];
-    for (auto &pc : pieces) {
-        GlMatrix(pc.second->matrix, g);
+    for (auto &pc : race.pieces) {
+        RaceMatrix(pc.second->matrix, g);
         glPushMatrix();
         glMultMatrixf(g);
-        pc.first->Draw(batch);
+        pc.first->Draw(race.batch);
         glPopMatrix();
     }
-    if (carModel) {
-        GlMatrix(car->matrix, g);
+    if (race.carModel) {
+        RaceMatrix(race.car->matrix, g);
         glPushMatrix();
         glMultMatrixf(g);
-        carModel->Draw(nullptr);
+        race.carModel->Draw(nullptr);
         glPopMatrix();
     }
 }
 
-// Stand-in for the HUD: checkpoints, laps, clock, countdown and messages in the window title.
-// ---- host HUD stand-in: a 5 x 7 bitmap font drawn as GL quads (the game's HUD sprites are not ported) ----
-struct Glyph {
-    char c;
-    const char *rows[7];
-};
-static const Glyph kFont[] = {
-    {'0', {"01110", "10001", "10011", "10101", "11001", "10001", "01110"}},
-    {'1', {"00100", "01100", "00100", "00100", "00100", "00100", "01110"}},
-    {'2', {"01110", "10001", "00001", "00010", "00100", "01000", "11111"}},
-    {'3', {"11110", "00001", "00001", "01110", "00001", "00001", "11110"}},
-    {'4', {"00010", "00110", "01010", "10010", "11111", "00010", "00010"}},
-    {'5', {"11111", "10000", "11110", "00001", "00001", "10001", "01110"}},
-    {'6', {"00110", "01000", "10000", "11110", "10001", "10001", "01110"}},
-    {'7', {"11111", "00001", "00010", "00100", "01000", "01000", "01000"}},
-    {'8', {"01110", "10001", "10001", "01110", "10001", "10001", "01110"}},
-    {'9', {"01110", "10001", "10001", "01111", "00001", "00010", "01100"}},
-    {':', {"00000", "00100", "00100", "00000", "00100", "00100", "00000"}},
-    {'.', {"00000", "00000", "00000", "00000", "00000", "01100", "01100"}},
-    {'/', {"00001", "00010", "00010", "00100", "01000", "01000", "10000"}},
-    {'!', {"00100", "00100", "00100", "00100", "00100", "00000", "00100"}},
-    {'A', {"01110", "10001", "10001", "11111", "10001", "10001", "10001"}},
-    {'C', {"01110", "10001", "10000", "10000", "10000", "10001", "01110"}},
-    {'E', {"11111", "10000", "10000", "11110", "10000", "10000", "11111"}},
-    {'G', {"01110", "10001", "10000", "10111", "10001", "10001", "01111"}},
-    {'I', {"01110", "00100", "00100", "00100", "00100", "00100", "01110"}},
-    {'K', {"10001", "10010", "10100", "11000", "10100", "10010", "10001"}},
-    {'M', {"10001", "11011", "10101", "10101", "10001", "10001", "10001"}},
-    {'N', {"10001", "11001", "10101", "10011", "10001", "10001", "10001"}},
-    {'O', {"01110", "10001", "10001", "10001", "10001", "10001", "01110"}},
-    {'P', {"11110", "10001", "10001", "11110", "10000", "10000", "10000"}},
-    {'Q', {"01110", "10001", "10001", "10001", "10101", "10010", "01101"}},
-    {'R', {"11110", "10001", "10001", "11110", "10100", "10010", "10001"}},
-    {'S', {"01111", "10000", "10000", "01110", "00001", "00001", "11110"}},
-    {'T', {"11111", "00100", "00100", "00100", "00100", "00100", "00100"}},
-    {'U', {"10001", "10001", "10001", "10001", "10001", "10001", "01110"}},
-    {'V', {"10001", "10001", "10001", "10001", "10001", "01010", "00100"}},
-};
-
-static void DrawText(float x, float y, float px, const char *s, float r, float g, float b)
+// HUD stand-in text: 5 x 7 glyphs as GL quads, with a shadow.
+static void DrawText(float x, float y, float px, const char *s, float r, float g, float b, void *)
 {
     for (int pass = 0; pass < 2; pass++) { // shadow, then the text
         float o = pass == 0 ? px * 0.5f : 0;
@@ -314,15 +156,12 @@ static void DrawText(float x, float y, float px, const char *s, float r, float g
         glBegin(GL_QUADS);
         float cx = x;
         for (const char *p = s; *p; p++, cx += 6 * px) {
-            const Glyph *gl = nullptr;
-            for (const Glyph &f : kFont)
-                if (f.c == *p)
-                    gl = &f;
-            if (!gl)
+            const char *const *rows = RaceGlyph(*p);
+            if (!rows)
                 continue;
             for (int row = 0; row < 7; row++)
                 for (int col = 0; col < 5; col++)
-                    if (gl->rows[row][col] == '1') {
+                    if (rows[row][col] == '1') {
                         float x0 = cx + col * px + o, y0 = y + row * px + o;
                         glVertex2f(x0, y0);
                         glVertex2f(x0 + px, y0);
@@ -334,7 +173,6 @@ static void DrawText(float x, float y, float px, const char *s, float r, float g
     }
 }
 
-// Clock, checkpoints and laps in the corners, the countdown and the race messages in the middle.
 static void DrawHud(int w, int h, const dsRaceProgress &rp)
 {
     glMatrixMode(GL_PROJECTION);
@@ -345,42 +183,7 @@ static void DrawHud(int w, int h, const dsRaceProgress &rp)
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_CULL_FACE);
-    fx32 t = rp.finished ? rp.finishTime : rp.clock;
-    int cs = (int)(((s64)(t & 0xfff) * 100) >> 12), sec = t >> 12;
-    char buf[64];
-    if (!rp.countdown) {
-        snprintf(buf, sizeof buf, "%d:%02d.%02d", sec / 60, sec % 60, cs);
-        DrawText(w - 6 * 4 * 9 - 12, 12, 4, buf, 1, 1, 1);
-    }
-    int cps = rp.checkpointCount - (rp.startPiece && rp.startPiece->type == PIECE_MULTILAP ? 1 : 0);
-    int passed = 0;
-    for (const dsTrigger *tr : rp.Triggers())
-        if (tr->kind == dsTrigger::CHECKPOINT && !tr->pending)
-            passed++;
-    snprintf(buf, sizeof buf, "CP %d/%d", passed, cps);
-    DrawText(12, 12, 4, buf, 1, 0.9f, 0.3f);
-    if (rp.lapCount > 1) {
-        snprintf(buf, sizeof buf, "TOUR %d/%d", rp.finished ? rp.lapCount : rp.lapsDone + 1, rp.lapCount);
-        DrawText(12, 50, 4, buf, 1, 0.9f, 0.3f);
-    }
-    const dsRaceEvent *last = rp.events.empty() ? nullptr : &rp.events.back();
-    if (rp.countdown) {
-        snprintf(buf, sizeof buf, "%d", sec + 1);
-        DrawText(w / 2 - 6 * 12 / 2, h / 3, 12, buf, sec >= 1 ? 1.0f : 1.0f, sec >= 1 ? 0.25f : 0.8f, 0.2f);
-    } else if (rp.finished) {
-        DrawText(w / 2 - 6 * 8 * 8 / 2, h / 3, 8, "ARRIVEE!", 0.3f, 1, 0.3f);
-    } else if (last && rp.clock - last->time < 0x2000) {
-        if (last->type == dsRaceEvent::GO)
-            DrawText(w / 2 - 6 * 12 * 3 / 2, h / 3, 12, "GO!", 0.3f, 1, 0.3f);
-        else if (last->type == dsRaceEvent::MISSED) {
-            snprintf(buf, sizeof buf, "%d CP MANQUE%s", last->value, last->value > 1 ? "S" : "");
-            DrawText(w / 2 - 6 * 5 * (int)strlen(buf) / 2, h / 3, 5, buf, 1, 0.3f, 0.3f);
-        } else if (last->type == dsRaceEvent::CHECKPOINT || last->type == dsRaceEvent::LAP) {
-            int ls = last->time >> 12, lc = (int)(((s64)(last->time & 0xfff) * 100) >> 12);
-            snprintf(buf, sizeof buf, "%d:%02d.%02d", ls / 60, ls % 60, lc);
-            DrawText(w / 2 - 6 * 6 * (int)strlen(buf) / 2, h / 3, 6, buf, 0.4f, 0.8f, 1);
-        }
-    }
+    RaceHudLayout(w, h, 1, rp, DrawText, nullptr);
     glEnable(GL_DEPTH_TEST);
 }
 
@@ -453,10 +256,9 @@ int main(int argc, char **argv)
     }
     SDL_GL_SetSwapInterval(1);
 
-    Race race;
+    RaceSession race;
     if (!race.Load(trackName))
         return 1;
-    size_t shownEvents = 0, resets = 0;
     const u32 STEP_MS = 1000 / 30;
     u32 next = SDL_GetTicks();
     bool quit = false;
@@ -468,34 +270,20 @@ int main(int argc, char **argv)
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
                 quit = true;
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_BACKSPACE)
-                race.progress->Reset(false);
+                race.Respawn();
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN)
-                race.progress->Reset(true);
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_c) {
-                race.camIndex ^= 1;
-                race.cams[race.camIndex].Reset();
-            }
+                race.Restart();
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_c)
+                race.ToggleCamera();
         }
         const u8 *k = SDL_GetKeyboardState(nullptr);
         dsCarInput in;
         in.accel = (k[SDL_SCANCODE_UP] || autoDrive) ? FX32_ONE : 0;
         in.brake = k[SDL_SCANCODE_DOWN] ? FX32_ONE : 0;
         in.steer = (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0);
-        race.progress->Frame(in, 2);
-        for (; shownEvents < race.progress->events.size(); shownEvents++) {
-            static const char *const names[] = {"restart", "go", "checkpoint", "missed", "lap", "finish", "respawn"};
-            const dsRaceEvent &ev = race.progress->events[shownEvents];
-            printf("[%d.%02d] %s %d\n", ev.time >> 12, ((ev.time & 0xfff) * 100) >> 12, names[ev.type], ev.value);
-        }
-        if (resets != race.progress->events.size()) // restart / respawn: the camera starts over
-            for (; resets < race.progress->events.size(); resets++) {
-                dsRaceEvent::Type ty = race.progress->events[resets].type;
-                if (ty == dsRaceEvent::RESTART || ty == dsRaceEvent::RESPAWN)
-                    race.cams[race.camIndex].Reset();
-            }
-        race.cams[race.camIndex].Update(*race.car); // camera vtable +0x1c, once per frame
+        race.Frame(in);
         UpdateTitle(win, *race.progress);
-        race.Draw(W, H);
+        DrawRace(race, W, H);
         DrawHud(W, H, *race.progress);
         if (frames >= 0 && frame == frames - 1 && shot) {
             glFinish();

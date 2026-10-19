@@ -196,6 +196,10 @@ python -P tools/analysis/port_status.py --race-only
 - **Bit-exact on the PSP:** the check suite (`tm_checksuite` on the host, `tm_checks` EBOOT on the PSP) runs the
   114 host checks' producers in PPSSPP; the 2.1 MB of dumps are identical byte for byte to the host's and the host
   checkers find 0 errors in them (`tools/psp/run_checks_psp.ps1`).
+- **The Coast race runs on the PSP** (`build/psp/tm_race/EBOOT.PBP`, sceGu 480 x 272, sceCtrl: X accelerate,
+  square brake, d-pad/analog steer, triangle checkpoint, start restart, select camera). In PPSSPP, after 150 frames
+  the car and camera are identical to the host's (`tools/psp/race_shot.ps1`).
+  ![tm_race on the PSP (PPSSPP), coa/easy/0](docs/psp_race.png)
 
 ```bash
 bash tools/psp_build.sh

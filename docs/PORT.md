@@ -475,8 +475,9 @@ partition on a PSP-2000/3000) and `PSP_HEAP_SIZE_KB(-1024)` (the whole partition
   case-insensitive like Windows). The handle is shared between `FSFile` copies (the game's unzip copies the struct
   as a second cursor), so it remembers the OS file position and seeks only when the cursor differs.
 - `os_psp.c`: `OS_Printf` to stderr (PPSSPP log / PSPLink), `OS_Panic` prints and returns to the XMB.
-- Portability fixes needed in the game code: none. newlib's `int32_t` is `int` on the Allegrex, so the `%d`
-  formats stay valid, and the code already avoided `sizeof(void *) == 4` assumptions for the 64-bit host.
+- Portability fixes needed in the game code: none. newlib's `int32_t` is `long` on the Allegrex, 32 bits like
+  `int`, so the drivers' `%d` formats on `s32`/`fx32` print the same (gcc's -Wformat warns about them in the PSP
+  race driver, where it is silenced); the code already avoided `sizeof(void *) == 4` assumptions for the 64-bit host.
 
 ### Bit-exact check on the PSP (step 2, done)
 
@@ -504,3 +505,32 @@ Finding: on the PSP, `freopen` on `stdout` leaks one sceIo descriptor per call (
 fail, and the game's loaders then hang. The suite assigns newlib's `stdout` to an `fopen`ed file instead (host:
 `freopen`). `FSh_OpenFiles()` (both back-ends) counts the files open through the FS shim; `suite.log` records it
 with the heap in use after each check: 0 everywhere.
+
+### Race on the PSP (step 3, first pass done)
+
+`build/psp/tm_race/EBOOT.PBP` (`src/psp/race_psp.cpp`) plays the Coast race: the same `RaceSession`
+(`src/app/race_session.*`, taken out of the host `tm_race`: loading, the 30 Hz frame of two 1/60 s ticks, events,
+camera reset/update, HUD stand-in layout and font) drawn by the G3D stand-in on sceGu (`src/shim/psp/g3d_gu.cpp`)
+at 480 x 272, 8888 colour, 16-bit depth.
+
+- Controls: d-pad (full lock, as on the DS) or analog stick (proportional beyond a dead zone of 24/128: a PSP
+  addition), X accelerate, square brake/reverse, triangle last checkpoint, start restart, select other chase
+  camera, R timing overlay (update / list build / GE wait in ms). 30 Hz: each frame is shown at the second VBlank.
+- Data: `files/` next to the EBOOT (= `extract/files`), optional `track.txt` ("easy/0"). Auto test: `auto.txt`
+  "<track> <frames>" drives at full throttle, saves the last frame to `shot.bmp` and writes `race_log.txt`.
+- **Check**: `powershell -ExecutionPolicy Bypass -File tools/psp/race_shot.ps1` runs it in PPSSPP and compares the
+  car and camera state after 150 frames of coa/easy/0 with `tm_race --frames 150 --auto` on the host:
+  **identical**; the frame (`docs/psp_race.png`) shows the same scene as the host (wider: 16:9 instead of 4:3).
+- G3D on sceGu: display lists are converted on first draw into triangle lists per (material, shape) with the
+  material colour and alpha baked in; textures to swizzled 5551 (lossless for DS colours) or 8888 (partial alpha);
+  the GE has no mirrored repeat, so flipped axes are stored mirrored at twice the size; textures above 512 are
+  halved. Culling: GU front faces are counter-clockwise as GL_CCW on the host. The sea is a 24 x 24 grid of
+  24-unit tiles around the camera (a single huge quad leaves the GE's guard band and is dropped). Near plane 0.5
+  (host 0.25) for the 16-bit depth buffer.
+- Screenshots under PPSSPP: the frame must be copied out of VRAM with `sceDmacMemcpy` (PPSSPP renders on the host
+  GPU and writes VRAM back on DMA/GE copies, not on CPU reads; a CPU read returned a frame several seconds old).
+- Measured on PPSSPP (coa/easy/0, 150 frames, auto): load 0.58 s; per frame 3.6 ms race update (2 ticks), 2.6 ms
+  to build the GE list; the GE wait is not meaningful in PPSSPP (it does not time the GE). 1 late frame of 150 (the
+  first, which converts the display lists). Memory: heap 2.9 MB in use (textures 1.7 MB, vertex arrays 0.26 MB),
+  far below the 52 MB extended partition: the 32 MB PSP-1000 (about 24 MB free) fits too. **Real-hardware speed is
+  not verified.**
