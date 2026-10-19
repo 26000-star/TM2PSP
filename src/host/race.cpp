@@ -180,13 +180,12 @@ static void DrawRace(RaceSession &race, int w, int h)
         pc.first->Draw(race.batch);
         glPopMatrix();
     }
-    if (race.carModel) {
-        RaceMatrix(race.car->matrix, g);
+    RaceSession::Draw cd[5];
+    for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
         glPushMatrix();
-        glMultMatrixf(g);
-        G3DrawLight dl;
-        G3SetDrawLight(race.CarLight(&dl));
-        race.carModel->Draw(nullptr);
+        glMultMatrixf(cd[i].matrix);
+        G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr);
+        cd[i].model->Draw(nullptr);
         glPopMatrix();
     }
     G3SetDrawLight(nullptr);

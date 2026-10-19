@@ -440,6 +440,9 @@ void G3DecodeShape(const std::vector<u8> &dl, G3ShapeSink &sink)
                     sink.End();
                 inPrim = false;
                 break;
+            case 0x14:
+                sink.Restore((int)(p0 & 31));
+                break;
             case 0x20:
                 sink.Color(p0 & 0x7fff);
                 break;
@@ -565,6 +568,22 @@ void G3Model::ComputeBounds()
         r2 = std::max(r2, dx * dx + dy * dy + dz * dz);
     }
     radius = sqrtf(r2);
+}
+
+void G3Model::BorrowTextures(const G3Model &from)
+{
+    for (Material &m : materials) {
+        if (m.texture >= 0)
+            continue;
+        for (const Material &f : from.materials)
+            if (f.name == m.name && f.texture >= 0 && f.texture < (int)from.textures.size()) {
+                m.texture = (int)textures.size();
+                textures.push_back(from.textures[f.texture]);
+                textures.back().gl = 0;
+                textures.back().gu = nullptr;
+                break;
+            }
+    }
 }
 
 // ---- DS lighting ----

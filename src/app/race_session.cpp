@@ -148,6 +148,25 @@ const G3DrawLight *RaceSession::CarLight(G3DrawLight *out) const
     return out;
 }
 
+int RaceSession::CarDraws(Draw *out) const
+{
+    int n = 0;
+    auto add = [&](const G3Model *m, const MtxFx43 &mtx) {
+        if (!m)
+            return;
+        Draw &d = out[n++];
+        d.model = m;
+        RaceMatrix(mtx, d.matrix);
+        d.lit = CarLight(&d.light) != nullptr;
+        if (d.lit)
+            RotationOf(mtx, d.light.rot);
+    };
+    add(carModel, car->matrix);
+    for (int i = 0; i < 4; i++)
+        add(wheelModels[i == 0 || i == 2 ? 0 : 1], car->wheelMatrix[i]);
+    return n;
+}
+
 RaceSession::~RaceSession()
 {
     pieces.clear();
@@ -221,6 +240,16 @@ bool RaceSession::Load(const char *trackName)
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
     carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
+    // Wheels: lwheel for 0 and 2, rwheel for 1 and 3 (ov003 0x020fd914 picks the name per wheel; rwheel has no
+    // textures of its own and shows lwheel's).
+    G3Model *lw = RaceLoadModel("Cars/coa/lwheel", false), *rw = RaceLoadModel("Cars/coa/rwheel", false);
+    if (lw && rw)
+        rw->BorrowTextures(*lw);
+    for (G3Model *w : {lw, rw})
+        if (w)
+            w->Upload();
+    wheelModels[0] = own(lw);
+    wheelModels[1] = own(rw);
     // Lighting of the track's time of day (the race setup takes it from the track, as the game's menus do).
     setup->timeOfDay = track.info.timeOfDay;
     if (!RaceBuildLighting(setup->EnvironmentName(), setup->TimeOfDayName(), &lightEnv))
@@ -244,11 +273,12 @@ bool RaceSession::Load(const char *trackName)
         pieces[k].first->Prepare(batch);
     }
     G3SetDrawLight(nullptr);
-    if (carModel) {
-        G3SetDrawLight(CarLight(&dl)); // lit: geometry and normals cached, colours recomputed at every draw
-        carModel->Prepare(nullptr);
-        G3SetDrawLight(nullptr);
+    Draw cd[5];
+    for (int i = 0, n = CarDraws(cd); i < n; i++) {
+        G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr); // lit: geometry and normals cached, colours per draw
+        cd[i].model->Prepare(nullptr);
     }
+    G3SetDrawLight(nullptr);
     if (skyModel)
         skyModel->Prepare(nullptr);
     printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),

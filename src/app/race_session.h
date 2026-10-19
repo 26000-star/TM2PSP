@@ -24,6 +24,7 @@ struct RaceSession {
     int camIndex = 0;
     G3Model *batch = nullptr, *carModel = nullptr;
     G3Model *skyModel = nullptr;  // Sky/<env>/sky_<time of day> (ov003 0x0211de20)
+    G3Model *wheelModels[2] = {}; // Cars/<env>/lwheel (wheels 0, 2) and rwheel (1, 3), ov003 0x020fd914
     float skyScale[3] = {1, 1, 1};
     // DS lighting and fog of the track's time of day (Scripts/config/tracks, see BuildLighting); off: the
     // material colours as before (tm_race --unlit).
@@ -49,6 +50,15 @@ struct RaceSession {
     // camera's line of sight for the specular term, recomputed every draw). Null when lighting is off.
     const G3DrawLight *PieceLight(size_t k, G3DrawLight *out) const;
     const G3DrawLight *CarLight(G3DrawLight *out) const;
+    // The car's draws: the body (lod1) at the car matrix and the four wheels at the matrices of the visual update
+    // (dsCarDynamics::wheelMatrix, ov003 0x02126d10, given to the car visual by ov003 0x020fbe48).
+    struct Draw {
+        const G3Model *model;
+        float matrix[16];
+        G3DrawLight light;
+        bool lit;
+    };
+    int CarDraws(Draw *out) const; // up to 5
     void Respawn() { progress->Reset(false); }
     void Restart() { progress->Reset(true); }
     void ToggleCamera()

@@ -244,13 +244,12 @@ void DrawRace(RaceSession &race)
         pc.first->Draw(race.batch);
         sceGumPopMatrix();
     }
-    if (race.carModel) {
-        RaceMatrix(race.car->matrix, g);
+    RaceSession::Draw cd[5];
+    for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
         sceGumPushMatrix();
-        sceGumMultMatrix((const ScePspFMatrix4 *)g);
-        G3DrawLight dl;
-        G3SetDrawLight(race.CarLight(&dl));
-        race.carModel->Draw(nullptr);
+        sceGumMultMatrix((const ScePspFMatrix4 *)cd[i].matrix);
+        G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr);
+        cd[i].model->Draw(nullptr);
         sceGumPopMatrix();
     }
     G3SetDrawLight(nullptr);

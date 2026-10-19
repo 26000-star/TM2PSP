@@ -65,6 +65,9 @@ public:
     // NNSG3dResMatData), then per material three 16-byte names: material, texture, palette. Piece models'
     // batch indices select these materials; their textures come from this model's TEX0 by name.
     bool LoadMaterialBin(const std::vector<u8> &file);
+    // Materials without a texture take the texture of the same-named material of `from` (Cars/<env>/rwheel uses
+    // lwheel's). Call before Upload of either model.
+    void BorrowTextures(const G3Model &from);
 
     struct Material {
         int texture = -1;          // index in m_textures
@@ -101,6 +104,7 @@ struct G3ShapeSink {
     virtual void End() = 0;
     virtual void Color(u32 rgb555) = 0;
     virtual void Normal(float x, float y, float z) {}
+    virtual void Restore(int index) {} // MTX_RESTORE: the following vertices use matrix stack entry `index`
     virtual void TexCoord(s16 s, s16 t) = 0;
     virtual void Vertex(const float *pos) = 0;
 };

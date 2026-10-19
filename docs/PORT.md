@@ -672,9 +672,23 @@ the display list (0.65 ms in PPSSPP, against 4.7 ms for a full reconversion). Th
 (own far plane, no depth); the PSP splits it to 150-unit edges instead of 3 (`G3Model::guardEdge`). Fog: linear in
 view depth from 12 to 2,044 units, from the W-buffer reading (15-bit fog depth = W x 8) — a port reading, not checked
 on hardware; the fog alpha of mode 0 (far geometry fading into the 2D backdrop) is not reproduced. Track specular is
-left out (its shininess table stays 0 below index 72, i.e. it only shows when the light, the surface and the line of
+left out (its shininess table is 0 up to index 72 of 127, i.e. it only shows when the light, the surface and the line of
 sight line up); the car's specular is computed. `tm_race --unlit` draws the previous way.
 
 Checks: host and PSP images show the same lit scene (`docs/host_race.png`, `docs/psp_race.png`); car and camera
 still identical to the host (easy/0 150 frames, hard/0 600 frames); `check_culling.py` 0 differences; reload test
 constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit colours), easy/0 3.1 -> 3.8 ms.
+
+### Step 3b: car wheels (done); shadow not ported
+
+- The car visual (loader ov003 0x020fd914) gives each wheel its own scene node with `Cars/<env>/lwheel` (wheels 0
+  and 2) or `Cars/<env>/rwheel` (1 and 3); rwheel has no textures and shows lwheel's (`G3Model::BorrowTextures`).
+  Every frame the visual update ov003 0x02126d10 (`dsCarDynamics::UpdateVisual`, already ported) computes the wheel
+  matrices (spin, steering on the front pair, hub position with the suspension) and ov003 0x020fbe48 stores them in
+  the visual, whose draw copies them into the wheel nodes. `RaceSession::CarDraws` returns the body (lod1) and the
+  four wheels with those matrices, lit with colour set 1 (relit every frame on the PSP, 56 vertices per wheel). Hubs
+  check: +-0.8 across, +-1.4 along, 0.35 up in car space (wheel radius 0.33), inside lod1's wheel arches.
+- The shadow is `Cars/<env>/shadow.n`, a closed car-shaped volume drawn as DS shadow polygons (the stencil-like
+  shadow volume of the geometry engine): not reproduced (it needs a stencil pass on both back-ends).
+- `lod0` holds the same wheels at fixed places plus light cones and a flat shadow: it is the close-up model of the
+  shop / replays, not used here.
