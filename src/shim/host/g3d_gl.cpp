@@ -62,6 +62,8 @@ struct GlSink : G3ShapeSink {
     void Vertex(const float *p) override { glVertex3f(p[0], p[1], p[2]); }
 };
 
+void G3Model::Prepare(const G3Model *) const {}
+
 void G3Model::Draw(const G3Model *batch) const
 {
     DrawOps(ops, batch);

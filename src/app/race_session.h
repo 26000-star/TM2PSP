@@ -25,6 +25,7 @@ struct RaceSession {
     G3Model *batch = nullptr, *carModel = nullptr;
     std::vector<std::pair<G3Model *, const dsTrackPiece *>> pieces;
     std::vector<std::unique_ptr<G3Model>> models; // owns batch, carModel and the piece models
+    std::vector<char> visible;  // per entry of `pieces`, from Cull
     size_t shownEvents = 0, resets = 0;
 
     // The track's collision shapes leave the collision world with the track; the drivers clear the world's mesh
@@ -34,6 +35,10 @@ struct RaceSession {
     // One 30 Hz frame: two 1/60 s ticks of the race with this input, events printed to stdout, the camera reset on
     // restart/respawn and updated once.
     void Frame(const dsCarInput &in);
+    // Marks the pieces whose bounding sphere touches the current camera's view frustum (vertical FOV from the
+    // camera, aspect w/h, near and far planes as the driver's projection). A port addition for the PSP's GE: the
+    // DS draws every piece the race grid gives it.
+    void Cull(float aspect, float nearZ, float farZ);
     void Respawn() { progress->Reset(false); }
     void Restart() { progress->Reset(true); }
     void ToggleCamera()

@@ -1,5 +1,5 @@
 # Reload test of the PSP race (build/psp/tm_race/EBOOT.PBP) in PPSSPP: loads the Coast tracks one after the other
-# (menu order, 20 frames each, -Count loads in all) and checks that the heap, the back-end texture and vertex bytes
+# (menu order, 20 frames each, -Count loads in all) and checks that the heap, the back-end texture (and VRAM) and vertex bytes
 # and the files open through the FS shim come back to the same values after every unload.
 #   powershell -ExecutionPolicy Bypass -File tools\psp\reload_test.ps1 [-Count 32]
 # Installs the EBOOT and extract/files in PPSSPP's memstick (PSP/GAME/TM2PSP, never a real PSP) and writes reload.txt.
@@ -34,7 +34,7 @@ $startFiles = ($start -split ' ') | Where-Object { $_ -match '^files=' }
 # Warm-up: a container kept by the game singletons grows once (512 bytes at the third load); after that the heap
 # must not move across the remaining loads (every track at least once for -Count >= 29).
 $values = $lines | Select-Object -Skip 3 | ForEach-Object { ($_ -split ' ', 3)[2] } | Sort-Object -Unique
-if ($lines.Count -ge $Count -and $values.Count -eq 1 -and $values -match "textures=0 meshes=0 $startFiles`$") {
+if ($lines.Count -ge $Count -and $values.Count -eq 1 -and $values -match "textures=0 vram=0 meshes=0 $startFiles`$") {
     Write-Output "$($lines.Count) reloads: heap, textures, meshes and open files identical after every unload from the 4th on ($values; before the first load: $start)"
 } else {
     Write-Output "LEAK or incomplete run: $($lines.Count) reloads, distinct states:"; $values; exit 1

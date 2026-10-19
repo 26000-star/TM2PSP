@@ -75,7 +75,8 @@ static bool SaveBmp(const char *path, int w, int h)
     return true;
 }
 
-static bool topView = false;
+static bool topView = false, noCull = false;
+static int drawnPieces = 0;
 
 static void DrawRace(RaceSession &race, int w, int h)
 {
@@ -130,7 +131,13 @@ static void DrawRace(RaceSession &race, int w, int h)
     glVertex3f(800, 2.5f, -500);
     glEnd();
     float g[16];
-    for (auto &pc : race.pieces) {
+    race.Cull((float)w / h, n, f);
+    drawnPieces = 0;
+    for (size_t k = 0; k < race.pieces.size(); k++) {
+        auto &pc = race.pieces[k];
+        if (!race.visible[k] && !topView && !noCull)
+            continue;
+        drawnPieces++;
         RaceMatrix(pc.second->matrix, g);
         glPushMatrix();
         glMultMatrixf(g);
@@ -243,6 +250,8 @@ int main(int argc, char **argv)
             frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc)
             shot = argv[++i];
+        else if (!strcmp(argv[i], "--no-cull")) // draw every piece (culling check)
+            noCull = true;
         else if (!strcmp(argv[i], "--top"))
             topView = true;
         else if (!strcmp(argv[i], "--finish-at") && i + 1 < argc) // save-file test: a finish at that frame
@@ -372,6 +381,7 @@ int main(int argc, char **argv)
             glFinish();
             SaveBmp(shot, W, H);
             const MtxFx43 &m = race.car->matrix;
+            printf("pieces drawn %d of %d\n",drawnPieces, (int)race.pieces.size());
             printf("frame %d pos=%d,%d,%d speed=%d gear=%d\n", frame, m.m[3][0], m.m[3][1], m.m[3][2],
                    race.car->speed, race.car->engine->gear);
             const MtxFx43 &c = race.cams[race.camIndex].matrix;

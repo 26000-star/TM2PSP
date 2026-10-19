@@ -609,3 +609,35 @@ The 5 x 7 HUD font gained the missing letters (B D F H J L W X Y Z) and `- < >`.
   sceGu back-end's texture and vertex bytes and `FSh_OpenFiles()`. Result over 32 loads (every track, then 6 more):
   textures 0, vertices 0, 1 open file (the VFS archive, as before the first load), heap 203,832 bytes from the 3rd
   unload on (one container of the game singletons grows by 512 bytes once at the 3rd load, then nothing moves).
+
+### Step 2: real-hardware performance safety (done; console speed to be measured by the user)
+
+Only PPSSPP numbers are available here (it runs the CPU at 222 MHz but does not time the GE): **the console's real
+frame times need the R overlay or the frame-time log on the PSP-3000.**
+
+- **Piece culling** (`RaceSession::Cull`, common code): each piece model gets a bounding sphere at load
+  (`G3Model::ComputeBounds`: the model's ops replayed with the node matrices and scales, every decoded vertex
+  transformed); a piece is skipped when its sphere (plus a 2 % + 0.5 unit margin for the fx32 camera basis) is
+  outside the camera's frustum (FOV from `config/cameras`, the driver's aspect, near and far planes). Both drivers
+  use it. **Check:** `python -P tools/host/check_culling.py` renders each of the 26 tracks at 3 points of the auto
+  drive with and without culling (`tm_race --no-cull`): **the 78 image pairs are identical pixel for pixel**, with
+  50 % of the pieces drawn on average (3,843 of 7,716).
+- **Textures: palettes and VRAM.** Textures with at most 16 / 256 distinct colours (after the mirror expansion)
+  become T4 / T8 with an 8888 CLUT holding their exact decoded colours (lossless, and closer to the host than the
+  previous 5551, which rounded each channel to 5 bits); the others stay 5551 / 8888. They go to VRAM while it lasts
+  (`G3GuSetVram`: the 688 KB after the frame and depth buffers, a bump allocator reset when the last VRAM texture
+  of a track is freed). Coast hard/0: 1,016 KB of textures -> **580 KB, all in VRAM**.
+- **16-bit vertices** (16 bytes instead of 24): DS positions are 4.12 fixed point within +-8, so x 4096 they fit
+  an s16 exactly, and texture coordinates are the DS s16 values (1/16 texel); the GE reads 16-bit values as
+  s16 / 32768, so the model matrix carries a x8 scale and the texture scale is 32768 / (16 x size). Midpoints of
+  split triangles round to 1/4096 unit, identically on both sides of a shared edge. 0 values clamped on the tracks
+  tried. Vertex arrays on hard/0: 2.38 MB -> **1.59 MB**.
+- **Meshes converted at load** (`G3Model::Prepare`): with culling, the lazy conversion on first draw would have
+  hit mid-race as pieces come into view; the first frame went from 237 ms to 56 ms (the rest of that first frame is
+  the race update).
+- **Frame-time log:** an empty `perf.txt` next to the EBOOT makes it append one line per second of racing to
+  `frametimes.txt`: average/max ms of the update, the GE list build and the GE wait, late frames and pieces drawn
+  (kept in memory, written only outside the race).
+- Results (PPSSPP, hard/0, 600 frames, auto drive): car and camera **identical to the host**; GE list build
+  3.1 -> 1.9 ms per frame, update unchanged (4.3 ms), heap 4.4 -> 2.6 MB. The image differs from the previous one by
+  at most 4 levels (exact palette colours) plus 405 edge pixels (16-bit positions). Reload test: still constant.

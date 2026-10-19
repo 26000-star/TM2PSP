@@ -3,12 +3,14 @@
 // no lighting. Differences forced by the hardware:
 //  - display lists are converted once (on first draw) into GU_TRIANGLES vertex arrays per (material, shape),
 //    with the material colour and alpha baked into the vertices; quads and strips become triangles;
-//  - textures become 16-bit 5551 (DS colours are 5 bits, so lossless) or 8888 when they have partial alpha,
-//    swizzled; the GE has no mirrored repeat, so a flipped repeating axis is stored mirrored at twice the size;
+//  - textures with at most 16 / 256 colours become T4 / T8 with an 8888 CLUT of their exact colours (lossless),
+//    the others 16-bit 5551 (DS colours are 5 bits) or 8888 when they have partial alpha; all swizzled, in VRAM
+//    while the space the driver gives (G3GuSetVram) lasts; the GE has no mirrored repeat, so a flipped repeating axis is stored mirrored at twice the size;
 //    the GE takes at most 512 x 512, larger textures are halved (nearest).
 #include "g3d_model.h"
 
 #include <malloc.h>
+#include <math.h>
 #include <string.h>
 
 #include <map>
@@ -21,23 +23,53 @@ namespace {
 
 struct GuTex {
     void *data = nullptr;
-    int w = 0, h = 0, psm = GU_PSM_5551;
+    u32 *clut = nullptr;       // T4 / T8: 8888 palette, clutBlocks blocks of 8 colours
+    int clutBlocks = 0;
+    bool inVram = false;
+    int w = 0, h = 0, tbw = 0, psm = GU_PSM_5551;
     float su = 1, sv = 1;      // texture coordinate scale (0.5 on a mirrored axis)
     bool repeatS = true, repeatT = true;
     size_t bytes = 0;
 };
 
+// Conversion vertex: raw DS values (texture coordinates in 1/16 texel, positions in model units).
 struct GuVertex {
     float u, v;
     u32 color;
     float x, y, z;
 };
-const int GU_VTYPE = GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D;
+
+// Drawn vertex, 16 bytes: the DS positions are 4.12 fixed point within +-8 (VTX_16; VTX_10 and VTX_XY/XZ/YZ are
+// coarser), so x 4096 they fit an s16 exactly, and the texture coordinates are the DS s16 values (1/16 texel). The
+// GE reads 16-bit values as s16 / 32768 in 3D mode: the model matrix is scaled by 8 and the texture scale is
+// 32768 / (16 x texture size) at draw time. Midpoints of split triangles round to the nearest 1/4096 unit and
+// 1/16 texel, the same way on both sides of a shared edge.
+struct GuVertex16 {
+    s16 u, v;
+    u32 color;
+    s16 x, y, z, pad;
+};
+const int GU_VTYPE = GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_3D;
+const float GU_POS_SCALE = 8.0f; // 32768 / 4096
 
 struct GuMesh {
-    GuVertex *v = nullptr;
+    GuVertex16 *v = nullptr;
     int count = 0;
+    float su = 0, sv = 0; // sceGuTexScale for this mesh (0: untextured)
 };
+
+int g_clampedVertices;
+bool g_prepareOnly; // DrawOps converts without drawing (Prepare) // positions or texture coordinates outside the s16 range (clamped; expected 0)
+
+s16 ToS16(float f)
+{
+    long r = lrintf(f);
+    if (r > 32767 || r < -32768) {
+        g_clampedVertices++;
+        r = r > 0 ? 32767 : -32768;
+    }
+    return (s16)r;
+}
 
 struct GuModelData {
     std::map<u64, GuMesh> meshes; // key: material source, material index, shape
@@ -58,6 +90,39 @@ void Swizzle(u8 *dst, const u8 *src, int bw, int h)
                 memcpy(dst, src + (size_t)(by * 8 + y) * bw + bx * 16, 16);
                 dst += 16;
             }
+}
+
+// VRAM left to textures by the driver (G3GuSetVram): a bump allocator, reset when no VRAM texture is alive (all
+// of a track's models are deleted together when the track is unloaded).
+u8 *g_vramBase, *g_vramTop;
+size_t g_vramSize, g_vramBytes;
+int g_vramTextures;
+
+void *AllocTexture(size_t size, bool *inVram)
+{
+    size_t a = (size + 63) & ~(size_t)63;
+    if (g_vramBase && (size_t)(g_vramTop - g_vramBase) + a <= g_vramSize) {
+        void *p = g_vramTop;
+        g_vramTop += a;
+        g_vramBytes += a;
+        g_vramTextures++;
+        *inVram = true;
+        return p;
+    }
+    *inVram = false;
+    return memalign(64, size);
+}
+
+void FreeTexture(GuTex *g)
+{
+    if (!g->inVram) {
+        free(g->data);
+    } else {
+        g_vramBytes -= (g->bytes + 63) & ~(size_t)63;
+        if (--g_vramTextures == 0)
+            g_vramTop = g_vramBase;
+    }
+    free(g->clut);
 }
 
 GuTex *MakeTexture(const G3Texture &t)
@@ -82,32 +147,89 @@ GuTex *MakeTexture(const G3Texture &t)
     while (eh / sy > 512)
         sy *= 2;
     int ow = ew / sx, oh = eh / sy;
-    if (ow < 8)
-        ow = 8; // the narrowest DS texture is 8 texels: 16 bytes per row at 16 bits, as the swizzle needs
     g->w = ow;
     g->h = oh;
     g->su = mirS ? 0.5f : 1;
     g->sv = mirT ? 0.5f : 1;
-    g->psm = t.translucent ? GU_PSM_8888 : GU_PSM_5551;
-    int bpp = t.translucent ? 4 : 2;
-    size_t size = (size_t)ow * oh * bpp;
-    u8 *linear = (u8 *)malloc(size);
+    std::vector<u32> img((size_t)ow * oh);
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < ow; x++)
+            memcpy(&img[(size_t)y * ow + x], at(x * sx, y * sy), 4);
+
+    // Palette: up to 16 colours -> T4, up to 256 -> T8, with an 8888 CLUT of the exact decoded colours (most DS
+    // textures are paletted; tex4x4 ones often have more colours). Otherwise 5551 (DS colours are 5 bits) or 8888
+    // when the texture has partial alpha.
+    std::vector<u32> pal;
+    std::map<u32, int> index;
+    for (u32 c : img) {
+        if (index.count(c))
+            continue;
+        if (pal.size() == 256)
+            break;
+        index[c] = (int)pal.size();
+        pal.push_back(c);
+    }
+    bool paletted = index.size() == pal.size() && pal.size() <= 256;
+    for (u32 c : img)
+        if (paletted && !index.count(c))
+            paletted = false;
+    int bppx2; // bits per texel / 4
+    if (paletted && pal.size() <= 16) {
+        g->psm = GU_PSM_T4;
+        bppx2 = 1;
+    } else if (paletted) {
+        g->psm = GU_PSM_T8;
+        bppx2 = 2;
+    } else {
+        g->psm = t.translucent ? GU_PSM_8888 : GU_PSM_5551;
+        bppx2 = t.translucent ? 8 : 4;
+    }
+    // Buffer width: swizzled rows are at least 16 bytes (the texture itself keeps its size).
+    int minW = 32 / bppx2;
+    g->tbw = ow < minW ? minW : ow;
+    size_t rowBytes = (size_t)g->tbw * bppx2 / 2, size = rowBytes * oh;
+    std::vector<u8> linear(size, 0);
     for (int y = 0; y < oh; y++)
         for (int x = 0; x < ow; x++) {
-            const u8 *c = at((x * sx) % ew, (y * sy) % eh);
-            u8 *o = linear + ((size_t)y * ow + x) * bpp;
-            if (bpp == 4) {
-                memcpy(o, c, 4);
-            } else {
-                u16 v = (u16)((c[0] >> 3) | (c[1] >> 3) << 5 | (c[2] >> 3) << 10 | (c[3] >= 128 ? 0x8000 : 0));
-                o[0] = (u8)v;
-                o[1] = (u8)(v >> 8);
+            u32 c = img[(size_t)y * ow + x];
+            u8 *row = &linear[(size_t)y * rowBytes];
+            const u8 *p = (const u8 *)&c;
+            switch (g->psm) {
+            case GU_PSM_T4:
+                row[x / 2] |= (u8)(index[c] << ((x & 1) * 4));
+                break;
+            case GU_PSM_T8:
+                row[x] = (u8)index[c];
+                break;
+            case GU_PSM_8888:
+                memcpy(&row[x * 4], p, 4);
+                break;
+            default: {
+                u16 v = (u16)((p[0] >> 3) | (p[1] >> 3) << 5 | (p[2] >> 3) << 10 | (p[3] >= 128 ? 0x8000 : 0));
+                row[x * 2] = (u8)v;
+                row[x * 2 + 1] = (u8)(v >> 8);
+                break;
+            }
             }
         }
-    g->data = memalign(16, size);
-    Swizzle((u8 *)g->data, linear, ow * bpp, oh);
-    free(linear);
-    sceKernelDcacheWritebackRange(g->data, size);
+    if (paletted) {
+        g->clutBlocks = (int)(pal.size() + 7) / 8;
+        g->clut = (u32 *)memalign(64, g->clutBlocks * 32);
+        memset(g->clut, 0, g->clutBlocks * 32);
+        memcpy(g->clut, pal.data(), pal.size() * 4);
+        sceKernelDcacheWritebackRange(g->clut, g->clutBlocks * 32);
+    }
+    // The swizzle needs whole 8-row blocks: DS textures are at least 8 texels high.
+    g->data = AllocTexture(size, &g->inVram);
+    if (g->inVram) {
+        std::vector<u8> sw(size);
+        Swizzle(sw.data(), linear.data(), (int)rowBytes, oh);
+        memcpy(g->data, sw.data(), size);
+        sceKernelDcacheWritebackInvalidateRange(g->data, size);
+    } else {
+        Swizzle((u8 *)g->data, linear.data(), (int)rowBytes, oh);
+        sceKernelDcacheWritebackRange(g->data, size);
+    }
     g->bytes = size;
     g_textureBytes += size;
     return g;
@@ -117,13 +239,10 @@ GuTex *MakeTexture(const G3Texture &t)
 struct GuSink : G3ShapeSink {
     std::vector<GuVertex> out, prim;
     int mode = 0;
-    float tw, th;
     u32 color;
     float alpha;
     float u = 0, v = 0;
-    GuSink(const G3Texture *t, const GuTex *g, u32 dif, float a)
-        : tw(t && t->w ? 1.0f / (16.0f * t->w) * (g ? g->su : 1) : 0),
-          th(t && t->h ? 1.0f / (16.0f * t->h) * (g ? g->sv : 1) : 0), alpha(a)
+    GuSink(u32 dif, float a) : alpha(a)
     {
         Color(dif);
     }
@@ -219,8 +338,8 @@ struct GuSink : G3ShapeSink {
     }
     void TexCoord(s16 s, s16 t) override
     {
-        u = s * tw;
-        v = t * th;
+        u = s;
+        v = t;
     }
     void Vertex(const float *p) override { prim.push_back({u, v, color, p[0], p[1], p[2]}); }
 };
@@ -233,12 +352,12 @@ G3Model::~G3Model()
         if (t.gu) {
             GuTex *g = (GuTex *)t.gu;
             g_textureBytes -= g->bytes;
-            free(g->data);
+            FreeTexture(g);
             delete g;
         }
     if (GuModelData *data = (GuModelData *)backend) {
         for (auto &m : data->meshes) {
-            g_meshBytes -= sizeof(GuVertex) * m.second.count;
+            g_meshBytes -= sizeof(GuVertex16) * m.second.count;
             free(m.second.v);
         }
         delete data;
@@ -270,10 +389,16 @@ void G3Model::DrawPart(int material, int shape, const G3Model *batch) const
 
 void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
 {
+    // prepare: convert the meshes only, no GE command (G3Model::Prepare).
+    const bool draw = !g_prepareOnly;
     if (!backend)
         backend = new GuModelData;
     GuModelData *data = (GuModelData *)backend;
-    sceGumPushMatrix();
+    const ScePspFVector3 s8 = {GU_POS_SCALE, GU_POS_SCALE, GU_POS_SCALE};
+    if (draw) {
+        sceGumPushMatrix();
+        sceGumScale(&s8);
+    }
     float scale = 1;
     const G3Model *src = nullptr;
     int mat = -1;
@@ -284,12 +409,14 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
     for (const Op &o : ops) {
         switch (o.kind) {
         case 0:
+            if (!draw)
+                break;
             sceGumPopMatrix();
             sceGumPushMatrix();
             if (o.a < (int)nodes.size())
                 sceGumMultMatrix((const ScePspFMatrix4 *)nodes[o.a].m);
-            if (scale != 1) {
-                ScePspFVector3 s = {scale, scale, scale};
+            {
+                ScePspFVector3 s = {scale * GU_POS_SCALE, scale * GU_POS_SCALE, scale * GU_POS_SCALE};
                 sceGumScale(&s);
             }
             break;
@@ -308,7 +435,8 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
                 // POLYGON_ATTR bit 6 = draw back faces, bit 7 = draw front faces; alpha 0 (wireframe) is drawn
                 // opaque, 1..30 translucent, as on the host.
                 bool back = (m.polyAttr >> 6) & 1, front = (m.polyAttr >> 7) & 1;
-                if (back && front) {
+                if (!draw) {
+                } else if (back && front) {
                     sceGuDisable(GU_CULL_FACE);
                 } else {
                     sceGuEnable(GU_CULL_FACE);
@@ -322,11 +450,16 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             } else {
                 src = nullptr;
             }
-            if (tex && tex->gu) {
+            if (!draw) {
+            } else if (tex && tex->gu) {
                 const GuTex *g = (const GuTex *)tex->gu;
                 sceGuEnable(GU_TEXTURE_2D);
+                if (g->clut) {
+                    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+                    sceGuClutLoad(g->clutBlocks, g->clut);
+                }
                 sceGuTexMode(g->psm, 0, 0, GU_TRUE);
-                sceGuTexImage(0, g->w, g->h, g->w, g->data);
+                sceGuTexImage(0, g->w, g->h, g->tbw, g->data);
                 sceGuTexWrap(g->repeatS ? GU_REPEAT : GU_CLAMP, g->repeatT ? GU_REPEAT : GU_CLAMP);
             } else {
                 sceGuDisable(GU_TEXTURE_2D);
@@ -338,32 +471,46 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             u64 key = (u64)(uintptr_t)src << 32 ^ (u64)(u32)(mat & 0xffff) << 16 ^ (u64)(u32)o.a;
             auto it = data->meshes.find(key);
             if (it == data->meshes.end()) {
-                GuSink sink(tex, tex ? (const GuTex *)tex->gu : nullptr, dif, alpha);
+                GuSink sink(dif, alpha);
                 sink.maxEdge = G3_GU_MAX_EDGE / scale;
                 G3DecodeShape(shapes[o.a], sink);
                 GuMesh m;
                 m.count = (int)sink.out.size();
+                const GuTex *g = tex ? (const GuTex *)tex->gu : nullptr;
+                if (g && tex->w && tex->h) {
+                    m.su = 32768.0f / (16.0f * tex->w) * g->su;
+                    m.sv = 32768.0f / (16.0f * tex->h) * g->sv;
+                }
                 if (m.count) {
-                    size_t bytes = sizeof(GuVertex) * m.count;
-                    m.v = (GuVertex *)memalign(16, bytes);
-                    memcpy(m.v, sink.out.data(), bytes);
+                    size_t bytes = sizeof(GuVertex16) * m.count;
+                    m.v = (GuVertex16 *)memalign(16, bytes);
+                    for (int k = 0; k < m.count; k++) {
+                        const GuVertex &a = sink.out[k];
+                        m.v[k] = {ToS16(a.u), ToS16(a.v), a.color, ToS16(a.x * 4096), ToS16(a.y * 4096),
+                                  ToS16(a.z * 4096), 0};
+                    }
                     sceKernelDcacheWritebackRange(m.v, bytes);
                     g_meshBytes += bytes;
                 }
                 it = data->meshes.emplace(key, m).first;
             }
-            if (it->second.count)
-                sceGumDrawArray(GU_TRIANGLES, GU_VTYPE, it->second.count, nullptr, it->second.v);
+            const GuMesh &mesh = it->second;
+            if (mesh.count && draw) {
+                if (mesh.su)
+                    sceGuTexScale(mesh.su, mesh.sv);
+                sceGumDrawArray(GU_TRIANGLES, GU_VTYPE, mesh.count, nullptr, mesh.v);
+            }
             break;
         }
         case 3: {
             scale = upScale;
             ScePspFVector3 s = {upScale, upScale, upScale};
-            sceGumScale(&s);
+            if (draw)
+                sceGumScale(&s);
             break;
         }
         case 4:
-            if (scale != 1) {
+            if (scale != 1 && draw) {
                 ScePspFVector3 s = {1 / scale, 1 / scale, 1 / scale};
                 sceGumScale(&s);
             }
@@ -371,9 +518,25 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             break;
         }
     }
-    sceGumPopMatrix();
-    sceGuDisable(GU_CULL_FACE);
+    if (draw) {
+        sceGumPopMatrix();
+        sceGuDisable(GU_CULL_FACE);
+    }
+}
+
+void G3Model::Prepare(const G3Model *batch) const
+{
+    g_prepareOnly = true;
+    DrawOps(ops, batch);
+    g_prepareOnly = false;
 }
 
 size_t G3GuTextureBytes() { return g_textureBytes; }
+size_t G3GuVramBytes() { return g_vramBytes; }
+int G3GuClampedVertices() { return g_clampedVertices; }
+void G3GuSetVram(void *base, size_t size)
+{
+    g_vramBase = g_vramTop = (u8 *)base;
+    g_vramSize = size;
+}
 size_t G3GuMeshBytes() { return g_meshBytes; }

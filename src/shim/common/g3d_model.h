@@ -53,6 +53,13 @@ public:
     // One shape with one material, without node matrix or scale (parts the game places itself: wheels).
     void DrawPart(int material, int shape, const G3Model *batch) const;
     void Upload();                 // creates the back-end textures (host: needs a current GL context)
+    // Converts what Draw(batch) would draw ahead of time (PSP: the vertex arrays; host: nothing), so that the
+    // first frame showing a model does not pay for it.
+    void Prepare(const G3Model *batch) const;
+    // Bounding sphere of everything Draw places (model space, node matrices and scales applied), for culling.
+    void ComputeBounds();
+    bool hasBounds = false;
+    float center[3] = {0, 0, 0}, radius = 0;
     // Firebrand's Tracks/<env>/material.bin, loaded next to texturebatch.n (main 0x0205513c): u32 count,
     // u32 offset of the names (from +8), `count` NNS material records (u16 tag, u16 size, then
     // NNSG3dResMatData), then per material three 16-byte names: material, texture, palette. Piece models'

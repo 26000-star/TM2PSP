@@ -489,3 +489,76 @@ void G3DecodeShape(const std::vector<u8> &dl, G3ShapeSink &sink)
     if (inPrim)
         sink.End();
 }
+
+// Bounding sphere: the ops are replayed as the back-ends draw them (node matrix, then the current scale; scale up /
+// down), every decoded vertex is transformed, and the sphere is centred on the box of the points.
+namespace {
+struct BoundSink : G3ShapeSink {
+    float m[16];
+    std::vector<float> pts;
+    void Begin(int) override {}
+    void End() override {}
+    void Color(u32) override {}
+    void TexCoord(s16, s16) override {}
+    void Vertex(const float *p) override
+    {
+        for (int i = 0; i < 3; i++)
+            pts.push_back(m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]);
+    }
+};
+
+void MulScale(float *m, float s)
+{
+    for (int i = 0; i < 12; i++)
+        m[i] *= s;
+}
+} // namespace
+
+void G3Model::ComputeBounds()
+{
+    BoundSink sink;
+    static const float id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    memcpy(sink.m, id, sizeof id);
+    float scale = 1;
+    for (const Op &o : ops) {
+        switch (o.kind) {
+        case 0:
+            memcpy(sink.m, o.a < (int)nodes.size() ? nodes[o.a].m : id, sizeof id);
+            if (scale != 1)
+                MulScale(sink.m, scale);
+            break;
+        case 2:
+            if (o.a < (int)shapes.size())
+                G3DecodeShape(shapes[o.a], sink);
+            break;
+        case 3:
+            scale = upScale;
+            MulScale(sink.m, upScale);
+            break;
+        case 4:
+            if (scale != 1)
+                MulScale(sink.m, 1 / scale);
+            scale = 1;
+            break;
+        }
+    }
+    hasBounds = !sink.pts.empty();
+    if (!hasBounds)
+        return;
+    float lo[3], hi[3];
+    for (int i = 0; i < 3; i++)
+        lo[i] = hi[i] = sink.pts[i];
+    for (size_t k = 0; k < sink.pts.size(); k += 3)
+        for (int i = 0; i < 3; i++) {
+            lo[i] = std::min(lo[i], sink.pts[k + i]);
+            hi[i] = std::max(hi[i], sink.pts[k + i]);
+        }
+    float r2 = 0;
+    for (int i = 0; i < 3; i++)
+        center[i] = (lo[i] + hi[i]) * 0.5f;
+    for (size_t k = 0; k < sink.pts.size(); k += 3) {
+        float dx = sink.pts[k] - center[0], dy = sink.pts[k + 1] - center[1], dz = sink.pts[k + 2] - center[2];
+        r2 = std::max(r2, dx * dx + dy * dy + dz * dz);
+    }
+    radius = sqrtf(r2);
+}

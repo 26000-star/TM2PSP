@@ -7,6 +7,7 @@
 // Auto test: when auto.txt holds "<track> <frames>", the race starts without the menu, the car accelerates on its
 // own, the frame <frames> is saved to shot.bmp, race_log.txt gets the same "frame/camera" lines as
 // `tm_race --frames N --auto` on the host plus timings and memory, and the program exits (tools/psp/race_shot.ps1).
+// Frame-time log: an (empty) perf.txt makes the program append per-second timings to frametimes.txt.
 // Reload test: reload.txt "<count>" loads the tracks in menu order, 20 frames each, and logs the heap after each
 // unload (tools/psp/reload_test.ps1).
 #include <malloc.h>
@@ -19,6 +20,7 @@
 #include <pspctrl.h>
 #include <pspdmac.h>
 #include <pspdisplay.h>
+#include <pspge.h>
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspkernel.h>
@@ -34,12 +36,16 @@ PSP_HEAP_SIZE_KB(-1024);
 
 size_t G3GuTextureBytes();
 size_t G3GuMeshBytes();
+size_t G3GuVramBytes();
+int G3GuClampedVertices();
+void G3GuSetVram(void *base, size_t size);
 
 namespace {
 
 const int BUF_W = 512, SCR_W = 480, SCR_H = 272;
 unsigned int __attribute__((aligned(16))) g_list[512 * 1024 / 4];
 bool g_quit = false;
+int g_drawnPieces = 0;
 
 int ExitCallback(int, int, void *)
 {
@@ -197,7 +203,13 @@ void DrawRace(RaceSession &race)
     sceGumLoadIdentity();
     DrawSea(eye.x, eye.z);
     float g[16];
-    for (auto &pc : race.pieces) {
+    race.Cull((float)SCR_W / SCR_H, 0.5f, 600.0f);
+    g_drawnPieces = 0;
+    for (size_t k = 0; k < race.pieces.size(); k++) {
+        auto &pc = race.pieces[k];
+        if (!race.visible[k])
+            continue;
+        g_drawnPieces++;
         RaceMatrix(pc.second->matrix, g);
         sceGumPushMatrix();
         sceGumMultMatrix((const ScePspFMatrix4 *)g);
@@ -223,10 +235,54 @@ void DrawRect(float x, float y, float w, float h, float r, float g, float b, flo
     sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, nullptr, v);
 }
 
+// Frame-time log (perf.txt next to the EBOOT turns it on): one line per second of racing in frametimes.txt with the
+// averages and maxima of the race update, the GE list build and the GE wait (ms), the frames that missed their
+// VBlank and the pieces drawn. Lines are kept in memory and appended to the file only outside the race (pause,
+// menus, exit) so that the memory stick writes do not disturb the timings.
+struct FrameLog {
+    bool on = false;
+    std::string path, pending;
+    int frames = 0, late = 0, pieces = 0;
+    u64 sum[3] = {}, max[3] = {};
+    void Add(const char *track, u64 update, u64 build, u64 wait, bool wasLate, int drawn)
+    {
+        if (!on)
+            return;
+        u64 v[3] = {update, build, wait};
+        for (int i = 0; i < 3; i++) {
+            sum[i] += v[i];
+            if (v[i] > max[i])
+                max[i] = v[i];
+        }
+        late += wasLate;
+        pieces += drawn;
+        if (++frames < 30)
+            return;
+        char line[160];
+        snprintf(line, sizeof line, "%s upd %.1f/%.1f build %.1f/%.1f ge %.1f/%.1f late %d pieces %d\n", track,
+                 sum[0] / 30000.0, max[0] / 1000.0, sum[1] / 30000.0, max[1] / 1000.0, sum[2] / 30000.0,
+                 max[2] / 1000.0, late, pieces / 30);
+        pending += line;
+        frames = late = pieces = 0;
+        for (int i = 0; i < 3; i++)
+            sum[i] = max[i] = 0;
+    }
+    void Flush()
+    {
+        if (!on || pending.empty())
+            return;
+        if (FILE *f = fopen(path.c_str(), "ab")) {
+            fwrite(pending.data(), 1, pending.size(), f);
+            fclose(f);
+        }
+        pending.clear();
+    }
+};
+
 void LogMemory(const char *what)
 {
-    printf("%s heap=%u textures=%u meshes=%u files=%d\n", what, (unsigned)mallinfo().uordblks,
-           (unsigned)G3GuTextureBytes(), (unsigned)G3GuMeshBytes(), FSh_OpenFiles());
+    printf("%s heap=%u textures=%u vram=%u meshes=%u files=%d\n", what, (unsigned)mallinfo().uordblks,
+           (unsigned)G3GuTextureBytes(), (unsigned)G3GuVramBytes(), (unsigned)G3GuMeshBytes(), FSh_OpenFiles());
     fflush(stdout);
 }
 
@@ -282,6 +338,9 @@ int main(int argc, char **argv)
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
+    // VRAM: draw and display buffers (8888, 0x88000 bytes each) and the 16-bit depth buffer end at 0x154000; the
+    // rest (688 KB) holds textures.
+    G3GuSetVram((u8 *)sceGeEdramGetAddr() + 0x154000, sceGeEdramGetSize() - 0x154000);
     FX_Init();
     FSh_SetRoot((dir + "/files").c_str());
     dsFileSystem::Create();
@@ -319,6 +378,12 @@ int main(int argc, char **argv)
     u32 prevButtons = 0;
     int held = 0; // frames a menu direction has been held (auto-repeat)
     bool overlay = false;
+    FrameLog frameLog;
+    if (ReadText(dir + "/perf.txt", buf, sizeof buf)) {
+        frameLog.on = true;
+        frameLog.path = dir + "/frametimes.txt";
+        frameLog.pending = "# per second: average/max ms of update, GE list build, GE wait; late frames; pieces\n";
+    }
     void *drawBuf = (void *)0;
     u64 sumUpdate = 0, sumDraw = 0, sumGpu = 0, maxFrame = 0;
     int frames = 0, late = 0, reloadsDone = 0;
@@ -428,8 +493,9 @@ int main(int argc, char **argv)
             printf("timing frames=%d update=%u us draw=%u us gpu=%u us (averages) max=%u us late=%d\n", frames,
                    (unsigned)(sumUpdate / frames), (unsigned)(sumDraw / frames), (unsigned)(sumGpu / frames),
                    (unsigned)maxFrame, late);
-            printf("memory heap=%u bytes textures=%u meshes=%u\n", (unsigned)mallinfo().uordblks,
-                   (unsigned)G3GuTextureBytes(), (unsigned)G3GuMeshBytes());
+            printf("memory heap=%u bytes textures=%u (vram %u) meshes=%u (clamped %d) pieces drawn=%d of %d\n",
+                   (unsigned)mallinfo().uordblks, (unsigned)G3GuTextureBytes(), (unsigned)G3GuVramBytes(),
+                   (unsigned)G3GuMeshBytes(), G3GuClampedVertices(), g_drawnPieces, (int)race.pieces.size());
             fflush(stdout);
             g_quit = true;
         }
@@ -450,12 +516,17 @@ int main(int argc, char **argv)
         u32 now = sceDisplayGetVcount();
         if (now - vcount > 2)
             late++;
+        if (app.screen == RaceApp::PLAYING && app.race)
+            frameLog.Add(RaceTracks(nullptr)[app.track].id, m - a, d - m, e - d, now - vcount > 2, g_drawnPieces);
+        else
+            frameLog.Flush();
         while (sceDisplayGetVcount() - vcount < 2)
             sceDisplayWaitVblankStart();
         vcount = sceDisplayGetVcount();
         drawBuf = sceGuSwapBuffers();
     }
     app.Unload();
+    frameLog.Flush();
     fflush(stdout);
     if (log)
         fclose(log);

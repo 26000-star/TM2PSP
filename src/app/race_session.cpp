@@ -1,6 +1,7 @@
 // Race session shared by the host and PSP race drivers (see race_session.h).
 #include "race_session.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -120,13 +121,65 @@ bool RaceSession::Load(const char *trackName)
             it = cache.emplace(p->modelPath, own(RaceLoadModel(p->modelPath))).first;
         if (it->second)
             pieces.push_back({it->second, p});
+        if (it->second && !it->second->hasBounds)
+            it->second->ComputeBounds();
     }
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
     carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
+    for (auto &pc : pieces)
+        pc.first->Prepare(batch); // once per model: the back-end caches by (material, shape)
+    if (carModel)
+        carModel->Prepare(nullptr);
     printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
            batch ? "ok" : "missing", carModel ? "ok" : "missing");
     return true;
+}
+
+void RaceSession::Cull(float aspect, float nearZ, float farZ)
+{
+    // Camera basis as the drivers' look-at: f = forward, s = f x up, u = s x f.
+    const MtxFx43 &cm = cams[camIndex].matrix;
+    float eye[3], f[3], up[3];
+    for (int i = 0; i < 3; i++) {
+        eye[i] = cm.m[3][i] / 4096.0f;
+        f[i] = cm.m[2][i] / 4096.0f;
+        up[i] = cm.m[1][i] / 4096.0f;
+    }
+    auto norm = [](float *v) {
+        float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (l > 0)
+            for (int i = 0; i < 3; i++)
+                v[i] /= l;
+    };
+    norm(f);
+    float s[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]};
+    norm(s);
+    float u[3] = {s[1] * f[2] - s[2] * f[1], s[2] * f[0] - s[0] * f[2], s[0] * f[1] - s[1] * f[0]};
+    float ty = tanf(cams[camIndex].fov / 4096.0f * 0.5f * 3.14159265f / 180), tx = ty * aspect;
+    // Side planes through the eye: normal (cos a, -sin a) in the (x, z) plane, tan a = tx (resp. ty).
+    float cx = 1 / sqrtf(1 + tx * tx), sx = tx * cx, cy = 1 / sqrtf(1 + ty * ty), sy = ty * cy;
+    visible.assign(pieces.size(), 1);
+    float g[16];
+    for (size_t k = 0; k < pieces.size(); k++) {
+        const G3Model *m = pieces[k].first;
+        if (!m->hasBounds)
+            continue;
+        RaceMatrix(pieces[k].second->matrix, g);
+        float c[3], scale = 0;
+        for (int i = 0; i < 3; i++) {
+            c[i] = g[i] * m->center[0] + g[4 + i] * m->center[1] + g[8 + i] * m->center[2] + g[12 + i] - eye[i];
+            float col = sqrtf(g[i * 4] * g[i * 4] + g[i * 4 + 1] * g[i * 4 + 1] + g[i * 4 + 2] * g[i * 4 + 2]);
+            scale = col > scale ? col : scale;
+        }
+        // Margin: the fx32 camera basis is not exactly orthonormal.
+        float r = m->radius * scale * 1.02f + 0.5f;
+        float x = c[0] * s[0] + c[1] * s[1] + c[2] * s[2];
+        float y = c[0] * u[0] + c[1] * u[1] + c[2] * u[2];
+        float z = c[0] * f[0] + c[1] * f[1] + c[2] * f[2];
+        if (z < nearZ - r || z > farZ + r || fabsf(x) * cx - z * sx > r || fabsf(y) * cy - z * sy > r)
+            visible[k] = 0;
+    }
 }
 
 void RaceSession::Frame(const dsCarInput &in)
