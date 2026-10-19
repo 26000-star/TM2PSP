@@ -238,6 +238,29 @@ graze a triangle edge and are not counted). Hits match on the set of pieces, mat
 - Not ported yet: the single-segment mesh query 0x020673c4 (grid DDA 0x01ffe3ec, used by cameras), pair tests
   between shapes (0x0205b3c0).
 
+## Vertical slice 3b: engine, gearbox, wheels, body box (done)
+
+`tm_physics --root extract/files --engine` builds the engine of the four cars and prints their gear tables, their
+torque curves in every gear and the body box of each skin; `tools/host/check_engine.py` recomputes them from the
+unluac decompilation of `vehicles.luac` and reads the boxes with the phase-2 BMD0 parser: **4 cars, 96 lines,
+0 errors**.
+
+- Engine (ov003 0x0212ee38..0x0212f248, 0x64 bytes): RPMMin/RPMMax, shift-up at RPMMax - 100. `NumGears` (6) counts
+  reverse: gear 0 = reverse (TopSpeedRev, TimeRev), 1..5 forward (TopSpeed1..5, Time1..5; TopSpeed6/Time6 unused
+  by the Coast car). Per gear: ratio = top speed / top rpm, start rpm = previous gear's top speed / ratio, torque =
+  top · ratio · (1 - start/top rpm) / time, shift-down rpm = start - 500. Coast car: top speed 69.6 m/s.
+- Torque falls off below a gear's start rpm as `(1 - t)^3` where the original subtracts t from the **integer 1**
+  (`rsb r3, r12, #1`), not 1.0: kept. Above the shift-up rpm it fades to 0 at RPMMax.
+- Automatic box: up-shift above the shift-up rpm, down-shift below the gear's shift-down rpm when the lower gear
+  would stay under the shift-up rpm; GearChangeGap blocks the drive force after a shift; after 0.25 s nearly
+  stopped, throttle/brake switch between first and reverse.
+- Wheels (0x5c bytes): hub and probe in car space, compression target clamped to ±WheelTravelPhys/2, compression
+  follows instantly when it grows and relaxes at 2.0/s, clamped to [WheelTravelBot, WheelTravelTop]; spin angle.
+  The car model takes the wheel positions from FrontWheel/RearWheel; wheel radius = hub height.
+- Body box (main 0x0204c1a4): the first model's box in `Cars/<car>/<skin>/lod1` scaled by posScale (Coast:
+  1.97 x 1.18 x 4.45 m), centred on (0, H/2, 0); the snow car's box is shortened.
+- The frame time is a global (*0x020d6a78, .bss) written by the main loop; host drivers set it (1/30 s).
+
 ## Next slices
 
 1. **Car physics update** (ov003 `dsCarDynamics_Step` 0x021222fc and its 80 callees, 0x021220a0..0x0212bed0 and

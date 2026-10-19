@@ -1,7 +1,8 @@
 // Decompiles selected functions to C. Args: <output file> <selector> [<selector> ...]
 // A selector is a function name, an address (0x02012345 or ov003:0x020f8000), or
 // "str:<text>" for every function that references a string containing <text>, or
-// "callers:<selector>" for the callers of the selected functions.
+// "callers:<selector>" for the callers of the selected functions, or "block:<memory block>" for every function
+// of a block (block:ov003).
 // With an output file ending in ".asm", writes the disassembly of the functions instead (address, bytes,
 // instruction), which shows the arguments the decompiler sometimes drops.
 //@category TM2PSP
@@ -72,6 +73,17 @@ public class Decompile extends GhidraScript {
 
 	private List<Function> select(String sel) throws Exception {
 		List<Function> out = new ArrayList<>();
+		if (sel.startsWith("block:")) {
+			// every function whose entry point is in the named memory block (e.g. block:ov003, block:arm9_main)
+			String name = sel.substring(6);
+			for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+				if (getMemoryBlock(f.getEntryPoint()) != null &&
+					getMemoryBlock(f.getEntryPoint()).getName().equals(name)) {
+					out.add(f);
+				}
+			}
+			return out;
+		}
 		if (sel.startsWith("callers:")) {
 			for (Function f : select(sel.substring(8))) {
 				for (Reference r : getReferencesTo(f.getEntryPoint())) {

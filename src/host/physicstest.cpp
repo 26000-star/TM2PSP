@@ -1,15 +1,20 @@
 // Host test driver for the physics slice.
-//   tm_physics --root <dir> [--raw] [--track easy/0] --raycast
+//   tm_physics --root <dir> [--raw] [--track easy/0] --raycast | --engine
 // --raycast  builds the collision world of a Coast track (one mesh shape per placed piece) and casts batches of
 //            probes over every piece, vertical and slanted, like the car's wheel and body probes; prints every hit.
 //            tools/host/check_raycast.py compares them with a float ray cast of the same triangles.
+// --engine   gear tables and torque curves of the four cars, and the body boxes of their models
+//            (tools/host/check_engine.py).
 #include <stdio.h>
 #include <string.h>
 
 #include <string>
 #include <vector>
 
+#include "car/dsCarEngine.h"
+#include "car/dsCarParams.h"
 #include "collision/dsCollisionWorld.h"
+#include "gfx/dsModelInfo.h"
 #include "fs/dsFileSystem.h"
 #include "math/dsMath.h"
 #include "nitro.h"
@@ -89,10 +94,44 @@ static int Raycast(dsTrack &t)
     return 0;
 }
 
+// Gear table and torque curve of every car, plus the car body box of each skin's lod1 model.
+static int EngineDump()
+{
+    dsCarParamsTable table;
+    table.Load();
+    for (const auto &kv : table.All()) {
+        const dsCarParams &p = kv.second;
+        dsCarEngine e(p);
+        printf("engine %s rpm=%d,%d,%d gears=%d max=%d gap=%d\n", kv.first.c_str(), e.rpmMin, e.rpmMax, e.rpmShiftUp,
+               (int)e.gears.size(), e.MaxSpeed(), e.gearChangeGap);
+        for (size_t i = 0; i < e.gears.size(); i++) {
+            const dsCarGear &g = e.gears[i];
+            printf("gear %s %d ratio=%d torque=%d start=%d down=%d\n", kv.first.c_str(), (int)i, g.ratio, g.torque,
+                   g.startRpm, g.downRpm);
+        }
+        for (s32 gear = -1; gear < (s32)e.gears.size(); gear++) {
+            e.gear = gear;
+            printf("torque %s %d", kv.first.c_str(), gear);
+            for (fx32 r = 0; r <= e.rpmMax + 0x100000; r += 0x80000)
+                printf(" %d", e.Torque(r));
+            printf("\n");
+        }
+        for (int skin = 0; skin < 10; skin++) {
+            char name[64];
+            snprintf(name, sizeof name, "Cars/%s/%d/lod1", kv.first.c_str(), skin);
+            VecFx32 size, centre;
+            if (dsModel_GetBox(name, &size, &centre))
+                printf("box %s %d %d,%d,%d %d,%d,%d\n", kv.first.c_str(), skin, size.x, size.y, size.z, centre.x,
+                       centre.y, centre.z);
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *track = "easy/0";
-    bool raw = false, raycast = false;
+    bool raw = false, raycast = false, engine = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -102,6 +141,8 @@ int main(int argc, char **argv)
             track = argv[++i];
         else if (!strcmp(argv[i], "--raycast"))
             raycast = true;
+        else if (!strcmp(argv[i], "--engine"))
+            engine = true;
         else {
             fprintf(stderr, "usage: tm_physics --root <dir> [--raw] [--track easy/0] --raycast\n");
             return 2;
@@ -111,6 +152,8 @@ int main(int argc, char **argv)
     FSh_SetRoot(root);
     dsFileSystem::Create();
     dsFileSystem::Get()->EnableVfs(!raw);
+    if (engine)
+        return EngineDump();
     dsRaceSetup *setup = dsRaceSetup::Get();
     setup->mode = 1;
     setup->SetEnvironment(ENV_COAST);
