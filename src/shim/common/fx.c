@@ -122,3 +122,43 @@ int MTX_Inverse43(const MtxFx43 *src, MtxFx43 *dst)
         (&dst->m[0][0])[i] = o[i];
     return 0;
 }
+
+/* MTX_Concat43 0x0202b620: ab = a * b (row vectors), sums of 64-bit products truncated, translation
+ * a.t * b + b.t. ab may alias a or b. */
+void MTX_Concat43(const MtxFx43 *a, const MtxFx43 *b, MtxFx43 *ab)
+{
+    MtxFx43 r;
+    int i, j;
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < 3; j++) {
+            s64 s = (s64)a->m[i][0] * b->m[0][j] + (s64)a->m[i][1] * b->m[1][j] + (s64)a->m[i][2] * b->m[2][j];
+            r.m[i][j] = (fx32)(s >> FX32_SHIFT) + (i == 3 ? b->m[3][j] : 0);
+        }
+    *ab = r;
+}
+
+/* FX_AcosIdx 0x0202ca9c: binary search of x among the cosines of the table (first or second quarter by the sign
+ * of x, compared on 16 bits), index of the last probed entry * 16 + 8. */
+u16 FX_AcosIdx(fx32 x)
+{
+    int lo, hi, mid = 0;
+    if (x < 0) {
+        lo = 0x400;
+        hi = 0x800;
+    } else {
+        lo = 0;
+        hi = 0x400;
+    }
+    while (lo <= hi) {
+        s16 c;
+        mid = (lo + hi) / 2;
+        c = FX_SinCosTable_[mid * 2 + 1];
+        if ((s16)x == c)
+            break;
+        if (c < (s16)x)
+            hi = mid - 1;
+        else
+            lo = mid + 1;
+    }
+    return (u16)((mid * 2 + 1) << 3);
+}

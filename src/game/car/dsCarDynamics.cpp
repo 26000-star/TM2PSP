@@ -108,33 +108,65 @@ void dsCarDynamics::BuildWheels()
     matrix.m[3][1] -= wheelLowering;
 }
 
-// @port ov003:0212b0b0 partial (the input record, the contact block and the visual fields are cleared by Place)
+// @port ov003:0212b0b0 done (the replay matrix +0x424 and the random generator +0x3e8 are not kept by the port)
 void dsCarDynamics::Reset()
 {
     inputMode = 0;
     steerAccum = 0;
     wheelTurn = 0;
     throttle = 0;
+    dt = 0;
+    driveDir = {};
+    grip = 0;
     dsMtx43_Identity(&matrix);
     dsMtx43_Identity(&prevMatrix);
     groundNormal = {0, FX32_ONE, 0};
     groundD = 0;
     dsMtx43_Copy(&matrix, &lastMatrix);
-    velocity = angularVelocity = {};
-    forwardSpeed = unk374 = 0;
-    speed = 0;
-    steer = unk3a4 = 0;
-    wheelSpin[0] = wheelSpin[1] = 0;
-    orthoRow = 0;
+    airTime = 0;
+    push = {};
+    ResetContacts();
+    bounce = 0;
+    aheadPushed = false;
+    prevCentre = {};
+    aheadHit = false;
+    aheadPush = {};
+    forwardSpeed = lateralSpeed = 0;
+    velocity = acceleration = angularVelocity = {};
     unk400 = 0;
     skid = 0;
+    surfaceCount[0] = surfaceCount[1] = 0;
+    speed = 0;
+    probeLength = 0;
+    angDamp[0] = (fx32)0xffc19001;
+    angDamp[1] = angDamp[2] = 0;
+    wheelSpin[0] = wheelSpin[1] = 0;
+    steer = unk3a4 = 0;
+    fakeRoll = fakeRollOut = fakePitch = 0;
+    orthoRow = 0;
+    input = dsCarInput();
     for (dsCarWheel *w : wheels)
         w->Reset();
     if (engine) {
         engine->Reset();
         maxSpeed = engine->MaxSpeed();
     }
+    random.Seed(0);
+    driveForce = 0;
+    wallVec = {};
+    noThrottle = false;
+    turboTimer = 0;
+    gravityDir = {0, (fx32)0xfffff001, 0};
+    alignTime = 0;
+    boosterAlign = false;
+    rampPitch = 0;
+    landTimer = 0;
+    groundTime = 0;
     warmUp = false;
+    normalForces = false;
+    skipAheadProbe = true;
+    stuck = false;
+    stuckTime = 0;
 }
 
 // @port ov003:021279e8 partial (the visual update of the car model, 0x02126d10, is not ported)
@@ -145,18 +177,25 @@ void dsCarDynamics::Place(const MtxFx43 &m, bool updateVisual, bool warm)
     dsMtx43_Copy(&matrix, &lastMatrix);
     airTime = 0;
     push = {};
-    groundedWheels = 0;
-    for (auto &h : wheelHits)
-        h.clear();
-    for (auto &h : bodyHits)
-        h.clear();
+    ResetContacts();
     bounce = 0;
-    forwardSpeed = unk374 = 0;
-    velocity = angularVelocity = {};
+    aheadPushed = false;
+    prevCentre = {};
+    aheadHit = false;
+    aheadPush = {};
+    forwardSpeed = lateralSpeed = 0;
+    velocity = acceleration = angularVelocity = {};
     unk400 = 0;
-    probeLength = 0x1800;
-    warmUp = warm;
+    roughTime = 0;
     (void)updateVisual;
+    probeLength = 0x1800;
+    noThrottle = false;
+    turboTimer = 0;
+    boosterAlign = false;
+    gravityDir = {0, (fx32)0xfffff001, 0};
+    warmUp = warm;
+    skipAheadProbe = true;
+    stuckTime = 0;
 }
 
 // @port ov003:02122b10 done

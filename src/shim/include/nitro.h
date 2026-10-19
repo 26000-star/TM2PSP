@@ -57,6 +57,8 @@ fx32 VEC_DotProduct(const VecFx32 *a, const VecFx32 *b);
 void VEC_CrossProduct(const VecFx32 *a, const VecFx32 *b, VecFx32 *out);
 void MTX_RotY43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal);
 int MTX_Inverse43(const MtxFx43 *src, MtxFx43 *dst); /* 0 on success, -1 when singular */
+void MTX_Concat43(const MtxFx43 *a, const MtxFx43 *b, MtxFx43 *ab);
+u16 FX_AcosIdx(fx32 x);
 
 /* ---- FS: ROM file system (backed by a host directory) ---- */
 typedef enum { FS_SEEK_SET = 0, FS_SEEK_CUR = 1, FS_SEEK_END = 2 } FSSeekFileMode;

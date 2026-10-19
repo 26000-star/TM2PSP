@@ -146,6 +146,10 @@ In short:
 - **Second slice: track loading.** The Coast piece catalogue, the race scenes, piece placement and the `.h` collision
   meshes (format now confirmed from the code). All 26 Coast tracks match an independent reading of the scripts and
   meshes, including a geometric check of every placed piece.
+- **Third slice: car physics.** Collision queries (16,722 probes over the 26 Coast tracks match an independent
+  ray/triangle test), engine and gearbox, and the whole car step of ov003 (wheel and body probes, suspension,
+  grip, drive, integration, surfaces). The Coast car dropped on the start platform settles, accelerates through
+  the gears, brakes and reverses (`tm_physics --drop` + `tools/host/check_drop.py`).
 
 ```bash
 cmake -S . -B build/host -G Ninja

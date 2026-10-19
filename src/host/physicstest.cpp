@@ -14,6 +14,7 @@
 #include "car/dsCarDynamics.h"
 #include "car/dsCarEngine.h"
 #include "car/dsCarParams.h"
+#include "core/dsTime.h"
 #include "collision/dsCollisionWorld.h"
 #include "gfx/dsModelInfo.h"
 #include "fs/dsFileSystem.h"
@@ -143,10 +144,92 @@ static int EngineDump()
     return 0;
 }
 
+// Height of the ground under (x, z): a vertical probe from 40 units up.
+static bool GroundAt(fx32 x, fx32 top, fx32 z, fx32 *y)
+{
+    std::vector<dsCollisionHit> hits;
+    dsCollisionWorld *w = dsCollisionWorld::Get();
+    w->SetMasks(1, 0);
+    w->AddSegment({x, top, z}, {0, -FX32_ONE, 0}, 0xa000, &hits);
+    w->TestSegments();
+    if (hits.empty())
+        return false;
+    fx32 best = hits[0].t;
+    *y = hits[0].point.y;
+    for (const auto &h : hits)
+        if (h.t < best) {
+            best = h.t;
+            *y = h.point.y;
+        }
+    return true;
+}
+
+// --drop: the Coast car is placed 1 unit above the start piece, left to settle with no input (90 steps), then
+// driven with full throttle (150 steps) and braked (60 steps). One line per step.
+static int Drop(dsTrack &t, const char *carName)
+{
+    dsCarParamsTable table;
+    table.Load();
+    if (table.All().find(carName) == table.All().end()) {
+        fprintf(stderr, "no parameters for %s (vehicles.luac needs the VFS)\n", carName);
+        return 1;
+    }
+    const dsCarParams &prm = table.Get(carName);
+    static dsCarModelGeometry geo;
+    if (!geo.Load(carName, 0, prm)) {
+        fprintf(stderr, "no model for %s\n", carName);
+        return 1;
+    }
+    for (dsTrackPiece *pc : t.pieces)
+        pc->CreateCollision();
+    dsTrackPiece *start = nullptr;
+    for (dsTrackPiece *pc : t.pieces)
+        if (!start && pc->info && pc->info->type == PIECE_START)
+            start = pc;
+    if (!start) {
+        fprintf(stderr, "no start piece\n");
+        return 1;
+    }
+    // Two units from the start piece's position along x: inside the flat start platform of the Coast start
+    // pieces (found by scanning the collision; the piece's own footprint rules are in dsTrack.cpp).
+    VecFx32 c = {start->pos.x + 0x2000, 0, start->pos.z};
+    fx32 gy = 0;
+    bool found = GroundAt(c.x, start->matrix.m[3][1] + 0x4000, c.z, &gy);
+    if (!found) {
+        fprintf(stderr, "no ground under the start piece\n");
+        return 1;
+    }
+    dsCarDynamics car(carName, &geo);
+    car.LoadParams(prm);
+    car.Reset();
+    MtxFx43 m;
+    MTX_RotY43_(&m, dsSin(start->rotation * 6434), dsCos(start->rotation * 6434));
+    m.m[3][0] = c.x;
+    m.m[3][1] = gy + FX32_ONE;
+    m.m[3][2] = c.z;
+    car.Place(m, false, false);
+    printf("start piece=%d rot=%d ground=%d pos=%d,%d,%d\n", start->id, start->rotation, gy, c.x, m.m[3][1], c.z);
+    g_dsFrameTime = 0x88;
+    for (int step = 0; step < 300; step++) {
+        dsCarInput in;
+        if (90 <= step && step < 240)
+            in.accel = FX32_ONE;
+        else if (240 <= step)
+            in.brake = FX32_ONE;
+        car.SetInput(in);
+        car.Step();
+        printf("step %d pos=%d,%d,%d up=%d,%d,%d v=%d,%d,%d speed=%d fwd=%d wheels=%d gear=%d rpm=%d hits=%d\n", step,
+               car.matrix.m[3][0], car.matrix.m[3][1], car.matrix.m[3][2], car.matrix.m[1][0], car.matrix.m[1][1],
+               car.matrix.m[1][2], car.velocity.x, car.velocity.y, car.velocity.z, car.speed, car.forwardSpeed,
+               car.groundedWheels, car.engine->gear, car.engine->rpm, car.bodyHitCount);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *track = "easy/0";
-    bool raw = false, raycast = false, engine = false;
+    bool raw = false, raycast = false, engine = false, drop = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -158,6 +241,8 @@ int main(int argc, char **argv)
             raycast = true;
         else if (!strcmp(argv[i], "--engine"))
             engine = true;
+        else if (!strcmp(argv[i], "--drop"))
+            drop = true;
         else {
             fprintf(stderr, "usage: tm_physics --root <dir> [--raw] [--track easy/0] --raycast\n");
             return 2;
@@ -181,5 +266,7 @@ int main(int argc, char **argv)
     }
     if (raycast)
         return Raycast(t);
+    if (drop)
+        return Drop(t, "coa");
     return 0;
 }

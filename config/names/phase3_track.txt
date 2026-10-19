@@ -166,3 +166,10 @@ ov003:02126628 dsCarDynamics_ReadModelBox
 ov003:020fd914 dsCarModel_ctor
 ov003:020fbf20 dsCarModel_Reset
 ov003:02122b10 dsCarDynamics_SetInput
+# slice 3c (car step)
+ov003:02129f04 dsCarDynamics_Grip
+ov003:0212a848 dsCarDynamics_GripLimit
+ov003:0212a9c0 dsCarDynamics_Drive
+02014cdc dsAbs
+020ad268 dsSurface_IsRough
+0208d404 dsTrackGrid_PieceAt

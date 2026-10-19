@@ -261,19 +261,52 @@ unluac decompilation of `vehicles.luac` and reads the boxes with the phase-2 BMD
   1.97 x 1.18 x 4.45 m), centred on (0, H/2, 0); the snow car's box is shortened.
 - The frame time is a global (*0x020d6a78, .bss) written by the main loop; host drivers set it (1/30 s).
 
-### Slice 3c (in progress): car dynamics
+### Slice 3c: car dynamics step (done)
 
-`src/game/car/dsCarDynamics.*` holds the known layout of the 0x554-byte simulation object (it starts with its own
-copy of `dsCarParams`), its construction (sea level 2.5 on Coast, speed limit 180.6), wheel and engine setup, reset,
-placement and the input smoothing (0x02127af8: steering at 1/SteerOnset, oversteer build-up/cancel, throttle =
-accel - 2Â·brake approached at dt/AccelOnset). The step itself (0x021222fc) is next: collisions (0x02124fa0),
-forces (0x02127f1c), integration (0x02129098), grip (0x02129f04), drive/brakes (0x0212a9c0), surfaces (0x02122b54).
+`src/game/car/dsCarDynamics.*` holds the 0x554-byte simulation object (it starts with its own copy of
+`dsCarParams`), its construction (sea level 2.5 on Coast, speed limit 180.6), wheel and engine setup, reset and
+placement, and the whole step `dsCarDynamics_Step` (0x021222fc) split by topic: `dsCarCollide.cpp` (0x02124fa0 and
+its probes/contacts/impulse), `dsCarForces.cpp` (0x02127f1c), `dsCarIntegrate.cpp` (0x02129098, 0x02129ce4),
+`dsCarGrip.cpp` (0x02129f04, 0x0212a848, 0x0212a9c0), `dsCarSurfaces.cpp` (0x02122b54), `dsCarStep.cpp`
+(0x021222fc, 0x02127374). Shared fixed-point idioms are in `car/dsCarMath.h`.
+
+`tm_physics --root extract/files --drop` places the Coast car one unit above the start platform of coa/easy/0,
+lets it settle for 90 steps (1/30 s), drives at full throttle for 150 steps and brakes for 60.
+`tools/host/check_drop.py` checks the behaviour (no DS trace exists yet to compare with): **0 errors**, the car
+settles level on four wheels (height 21.98 ± 0.008), reaches 15 m/s in 1.4 s, shifts to 2nd, stops when braking
+and then reverses. Two runs give identical output.
+
+- Step order: donut blend, then for player/AI input (modes 0, 3) `UpdateInputs` (0x02127af8), `Drive`
+  (0x0212a9c0: engine update, drive direction along the front wheels' ground), `Grip` (0x02129f04: gravity,
+  lateral grip, skid drag, brakes, rolling resistance), `Integrate` (0x02129098: steering yaw, air control, tilt,
+  two rotations about the body centre, the yaw one about the rear axle when grounded, then position); then
+  `Collide` (except replay mode 2), `Surfaces`, `Forces`, one row re-orthonormalised per step, `UpdateWheels`.
+- Collision pass: 4 wheel probes (downwards through each wheel, length 0.75..1.5 growing with fall speed and spin)
+  and up to 6 body probes (centre to the four corners, a roof probe, one along the velocity from the previous
+  centre), one batch. Ground plane = mean of the grounded wheels' contacts, minus the most deviating normal when
+  3-4 wheels touch. Body hits are averaged into one impulse `-(1+e) vn / (1/m + |r x n|^2 / I)`, penetration
+  first resolved as a position push; against walls the normal is pulled into the ground plane (WallEnforcer), only
+  the yaw part of the angular impulse stays, and WallTurnFactor/WallTurnMax/WallSlowdown apply.
+- Suspension (Forces): per grounded wheel, force = contact normal x compression (vertical on ground flatter than
+  FlatAng), torque = force x lever (lever x scaled by SuspAngForce, z by SuspAngForce raised towards 30 on slopes);
+  damping along the ground normal; self-righting; angular damping per car axis between AngDampAir and the ground
+  values (AngDampRelease when relaxing).
+- Exactness: products are 64-bit rounded (`+0x800 >> 12`) except where the original multiplies on 32 bits
+  (lerps by WallEnforcer/SlopeClimb, booster gravity), vectors are scaled by `FX_InvFx64c` 32.32 reciprocals
+  (bits 32..63 of `v * k + 2^31`), `MTX_Concat43`, `dsVec_MulMtx33/43` and the axis-angle matrix truncate.
+  `FX_AcosIdx` is a binary search of the cosine table (added to the shim); the random generator is MT19937
+  seeded with 0 at reset, 12-bit outputs.
+- Known quirks kept: the ramp-pitch test checks wheel 2 twice; the wall test `|fwd . n| > -0.707` is always true;
+  the stuck test uses `_dcmpgt(up.y, 0.0)`; `cos(pi)` makes the steep-front-ground branch of Drive dead code.
+- Not ported: replay modes 1/2 targets (+0x424/+0x448), the visual update 0x02126d10 except the wheel surfaces,
+  sparks and debug lines, the owner vehicle's booster flag. Boosters (material 7) need the race grid lookup
+  (main 0x0208d404): the port takes it as a callback (`pieceRotationAt`), not wired in the test driver yet.
 
 ## Next slices
 
-1. **Car physics update** (ov003 `dsCarDynamics_Step` 0x021222fc and its 80 callees, 0x021220a0..0x0212bed0 and
-   wheels/engine 0x0212e010..0x0212f324; notes in the slice-3 hand-over), cameras (`config/cameras`). Deterministic
-   unit tests (car dropped on a flat piece settles, then accelerates).
+1. **Cameras** (`config/cameras`), the race grid lookup for boosters (main 0x0208d404 / 0x0208cb80), car/car
+   contacts (the +0x248 sums), and a dynamic trace of `dsCarDynamics_Step` in melonDS to compare the port bit for
+   bit (the drop test only checks behaviour).
 2. Terrain builder (ov003 0x02100b2c and callees) so Coast cliffs and beaches exist for collision and display.
 3. Renderer: Firebrand's BMD0/G3 path onto an OpenGL host back-end (TMPM from phase 2 for the PSP); environment
    assets (main 0x02099e6c: `texturebatch.n`, `material.bin`, sky, sea).

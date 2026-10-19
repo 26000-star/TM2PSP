@@ -9,6 +9,9 @@ void dsMtx43_Identity(MtxFx43 *m);                                         // it
 void dsVec_MulMtx33(const VecFx32 *v, const MtxFx43 *m, VecFx32 *out);     // itcm 0x01ffa8a4 (rotation only, truncating)
 fx32 dsVec_Mag(const VecFx32 *v);                                          // itcm 0x01ffaa58
 void dsVec_Normalize(const VecFx32 *v, VecFx32 *out);                      // itcm 0x01ffaac0
+void dsMtx43_RotateAxis(MtxFx43 *m, const VecFx32 *axis, fx32 s, fx32 c);    // itcm 0x01ffa730
+fx32 dsAcosFx(fx32 x);
+void dsMtx43_FromAxes(MtxFx43 *m, const VecFx32 *pos, const VecFx32 *fwd, const VecFx32 *up); // main 0x020584a4                                                     // main 0x020b29b4
 
 // Sine/cosine of an angle in fx32 radians through the SDK table, as the game inlines it everywhere:
 // idx = 65535 * (angle mod 2pi) / 2pi, entry idx >> 4. 2pi = 25736 (6.2832).
