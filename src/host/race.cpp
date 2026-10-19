@@ -1,0 +1,357 @@
+// tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
+//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto]
+// Keys: up = accelerate, down = brake/reverse, left/right = steer, R = back to the start, Esc = quit.
+//
+// What runs is the ported game code: track scene and piece placement (slice 2), collision world (3a), car
+// parameters, engine and the full dsCarDynamics step (3b, 3c) at the game's 30 Hz. The drawing is the host G3D
+// stand-in (src/shim/host/g3d_gl.cpp) fed with the game's own models and piece matrices; the game's main loop,
+// race manager, cameras (config/cameras), HUD and the terrain builder are still to port, so the camera here is a
+// simple chase view and the Coast cliffs/beaches are missing.
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <SDL.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <GL/gl.h>
+
+#include "car/dsCarDynamics.h"
+#include "car/dsCarParams.h"
+#include "collision/dsCollisionWorld.h"
+#include "core/dsTime.h"
+#include "fs/dsFileSystem.h"
+#include "g3d_gl.h"
+#include "math/dsMath.h"
+#include "nitro.h"
+#include "track/dsPieceData.h"
+#include "track/dsRaceSetup.h"
+#include "track/dsTrack.h"
+
+static bool ReadFile(const std::string &path, std::vector<u8> *out)
+{
+    dsFile *f = dsFileSystem::Get()->Open(path.c_str());
+    if (!f || !f->IsOpen()) {
+        delete f;
+        return false;
+    }
+    out->resize((size_t)f->GetSize());
+    bool ok = !out->empty() && f->Read(out->data(), (u32)out->size()) == (int)out->size();
+    delete f;
+    return ok;
+}
+
+static G3Model *LoadModel(const std::string &name)
+{
+    std::vector<u8> d;
+    if (!ReadFile("graphics/" + name + ".n", &d))
+        return nullptr;
+    G3Model *m = new G3Model;
+    if (!m->Load(d)) {
+        delete m;
+        return nullptr;
+    }
+    m->Upload();
+    return m;
+}
+
+// DS 4x3 matrix (row vectors, fx32) to a GL column-major matrix.
+static void GlMatrix(const MtxFx43 &m, float *g)
+{
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 3; c++)
+            g[r * 4 + c] = m.m[r][c] / 4096.0f;
+    g[3] = g[7] = g[11] = 0;
+    g[15] = 1;
+}
+
+static void LookAt(const float *eye, const float *at, const float *up)
+{
+    float f[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+    float l = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    for (float &v : f)
+        v /= l;
+    float s[3] = {f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]};
+    l = sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+    for (float &v : s)
+        v /= l;
+    float u[3] = {s[1] * f[2] - s[2] * f[1], s[2] * f[0] - s[0] * f[2], s[0] * f[1] - s[1] * f[0]};
+    float m[16] = {s[0], u[0], -f[0], 0, s[1], u[1], -f[1], 0, s[2], u[2], -f[2], 0, 0, 0, 0, 1};
+    glMultMatrixf(m);
+    glTranslatef(-eye[0], -eye[1], -eye[2]);
+}
+
+static bool SaveBmp(const char *path, int w, int h)
+{
+    std::vector<u8> px((size_t)w * h * 3);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_BGR_EXT, GL_UNSIGNED_BYTE, px.data());
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return false;
+    int row = (w * 3 + 3) & ~3, size = 54 + row * h;
+    u8 hd[54] = {'B', 'M'};
+    auto w32 = [&](int o, u32 v) { hd[o] = (u8)v; hd[o + 1] = (u8)(v >> 8); hd[o + 2] = (u8)(v >> 16); hd[o + 3] = (u8)(v >> 24); };
+    w32(2, size);
+    w32(10, 54);
+    w32(14, 40);
+    w32(18, w);
+    w32(22, h);
+    hd[26] = 1;
+    hd[28] = 24;
+    w32(34, row * h);
+    fwrite(hd, 1, 54, f);
+    std::vector<u8> pad(row - w * 3, 0);
+    for (int y = 0; y < h; y++) {
+        fwrite(&px[(size_t)y * w * 3], 1, w * 3, f);
+        fwrite(pad.data(), 1, pad.size(), f);
+    }
+    fclose(f);
+    return true;
+}
+
+static bool topView = false;
+
+struct Race {
+    dsTrack track;
+    dsCarParamsTable table;
+    dsCarModelGeometry geo;
+    std::unique_ptr<dsCarDynamics> car;
+    MtxFx43 startMatrix;
+    G3Model *batch = nullptr, *carModel = nullptr;
+    std::vector<std::pair<G3Model *, const dsTrackPiece *>> pieces;
+
+    bool Load(const char *trackName);
+    void Restart() { car->Reset(); car->Place(startMatrix, false, true); }
+    void Draw(int w, int h);
+};
+
+static bool GroundAt(fx32 x, fx32 top, fx32 z, fx32 *y)
+{
+    std::vector<dsCollisionHit> hits;
+    dsCollisionWorld *w = dsCollisionWorld::Get();
+    w->SetMasks(1, 0);
+    w->AddSegment({x, top, z}, {0, -FX32_ONE, 0}, 0xa000, &hits);
+    w->TestSegments();
+    if (hits.empty())
+        return false;
+    size_t b = 0;
+    for (size_t i = 1; i < hits.size(); i++)
+        if (hits[i].t < hits[b].t)
+            b = i;
+    *y = hits[b].point.y;
+    return true;
+}
+
+bool Race::Load(const char *trackName)
+{
+    dsRaceSetup *setup = dsRaceSetup::Get();
+    setup->mode = 1;
+    setup->SetEnvironment(ENV_COAST);
+    dsPieceDataTable::Get()->Load(ENV_COAST);
+    std::string scene = std::string("coa/") + trackName;
+    if (!track.LoadScene(scene.c_str(), true)) {
+        fprintf(stderr, "cannot load scene %s\n", scene.c_str());
+        return false;
+    }
+    for (dsTrackPiece *p : track.pieces)
+        p->CreateCollision();
+    table.Load();
+    if (table.All().find("coa") == table.All().end())
+        return false;
+    const dsCarParams &prm = table.Get("coa");
+    if (!geo.Load("coa", 0, prm))
+        return false;
+    car.reset(new dsCarDynamics("coa", &geo));
+    car->LoadParams(prm);
+
+    // Start: the first start piece; the car stands 2 units along x from the piece position, on the platform.
+    const dsTrackPiece *start = nullptr;
+    for (const dsTrackPiece *p : track.pieces)
+        if (!start && p->info && p->info->type == PIECE_START)
+            start = p;
+    if (!start)
+        return false;
+    VecFx32 c = {start->pos.x + 0x2000, 0, start->pos.z};
+    fx32 gy = start->matrix.m[3][1];
+    GroundAt(c.x, start->matrix.m[3][1] + 0x4000, c.z, &gy);
+    MTX_RotY43_(&startMatrix, dsSin(start->rotation * 6434), dsCos(start->rotation * 6434));
+    startMatrix.m[3][0] = c.x;
+    startMatrix.m[3][1] = gy + 0x800;
+    startMatrix.m[3][2] = c.z;
+    Restart();
+
+    batch = LoadModel("Tracks/coa/texturebatch");
+    std::map<std::string, G3Model *> cache;
+    for (const dsTrackPiece *p : track.pieces) {
+        auto it = cache.find(p->modelPath);
+        if (it == cache.end())
+            it = cache.emplace(p->modelPath, LoadModel(p->modelPath)).first;
+        if (it->second)
+            pieces.push_back({it->second, p});
+    }
+    carModel = LoadModel("Cars/coa/0/lod0");
+    if (!carModel)
+        carModel = LoadModel("Cars/coa/0/lod1");
+    printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
+           batch ? "ok" : "missing", carModel ? "ok" : "missing");
+    return true;
+}
+
+void Race::Draw(int w, int h)
+{
+    glViewport(0, 0, w, h);
+    glClearColor(0.55f, 0.75f, 0.95f, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    float n = 0.25f, f = 600, t = n * tanf(30.0f * 3.14159265f / 180), r = t * w / h;
+    glFrustum(-r, r, -t, t, n, f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    const MtxFx43 &m = car->matrix;
+    float pos[3] = {m.m[3][0] / 4096.0f, m.m[3][1] / 4096.0f, m.m[3][2] / 4096.0f};
+    float fwd[3] = {m.m[2][0] / 4096.0f, 0, m.m[2][2] / 4096.0f};
+    float fl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+    if (fl > 0.01f) {
+        fwd[0] /= fl;
+        fwd[2] /= fl;
+    }
+    float eye[3] = {pos[0] - fwd[0] * 7, pos[1] + 2.8f, pos[2] - fwd[2] * 7};
+    if (topView) {
+        eye[0] = pos[0] - fwd[0] * 40;
+        eye[1] = pos[1] + 60;
+        eye[2] = pos[2] - fwd[2] * 40;
+    }
+    float at[3] = {pos[0] + fwd[0] * 2, pos[1] + 0.8f, pos[2] + fwd[2] * 2};
+    float up[3] = {0, 1, 0};
+    LookAt(eye, at, up);
+
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    // Sea at the Coast sea level (2.5).
+    glDisable(GL_TEXTURE_2D);
+    glColor3f(0.15f, 0.35f, 0.6f);
+    glBegin(GL_QUADS);
+    glVertex3f(-500, 2.5f, -500);
+    glVertex3f(-500, 2.5f, 800);
+    glVertex3f(800, 2.5f, 800);
+    glVertex3f(800, 2.5f, -500);
+    glEnd();
+    float g[16];
+    for (auto &pc : pieces) {
+        GlMatrix(pc.second->matrix, g);
+        glPushMatrix();
+        glMultMatrixf(g);
+        pc.first->Draw(batch);
+        glPopMatrix();
+    }
+    if (carModel) {
+        GlMatrix(car->matrix, g);
+        glPushMatrix();
+        glMultMatrixf(g);
+        carModel->Draw(nullptr);
+        glPopMatrix();
+    }
+}
+
+int main(int argc, char **argv)
+{
+    const char *root = "extract/files", *trackName = "easy/0", *shot = nullptr;
+    int frames = -1;
+    bool autoDrive = false;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--root") && i + 1 < argc)
+            root = argv[++i];
+        else if (!strcmp(argv[i], "--track") && i + 1 < argc)
+            trackName = argv[++i];
+        else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
+            frames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--shot") && i + 1 < argc)
+            shot = argv[++i];
+        else if (!strcmp(argv[i], "--top"))
+            topView = true;
+        else if (!strcmp(argv[i], "--auto"))
+            autoDrive = true;
+        else {
+            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto]\n");
+            return 2;
+        }
+    }
+    FX_Init();
+    FSh_SetRoot(root);
+    dsFileSystem::Create();
+    dsFileSystem::Get()->EnableVfs(true);
+
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
+        fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        return 1;
+    }
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    const int W = 768, H = 576;
+    SDL_Window *win = SDL_CreateWindow("TM2PSP host - Coast", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
+                                       SDL_WINDOW_OPENGL | (frames >= 0 ? SDL_WINDOW_HIDDEN : 0));
+    if (!win || !SDL_GL_CreateContext(win)) {
+        fprintf(stderr, "window: %s\n", SDL_GetError());
+        return 1;
+    }
+    SDL_GL_SetSwapInterval(1);
+
+    Race race;
+    if (!race.Load(trackName))
+        return 1;
+    g_dsFrameTime = 0x88; // 1/30 s
+    const u32 STEP_MS = 1000 / 30;
+    u32 next = SDL_GetTicks();
+    bool quit = false;
+    for (int frame = 0; !quit && (frames < 0 || frame < frames); frame++) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT)
+                quit = true;
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
+                quit = true;
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_r)
+                race.Restart();
+        }
+        const u8 *k = SDL_GetKeyboardState(nullptr);
+        dsCarInput in;
+        in.accel = (k[SDL_SCANCODE_UP] || autoDrive) ? FX32_ONE : 0;
+        in.brake = k[SDL_SCANCODE_DOWN] ? FX32_ONE : 0;
+        in.steer = (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0);
+        race.car->SetInput(in);
+        race.car->Step();
+        if (race.car->respawnRequest) {
+            race.car->respawnRequest = false;
+            race.Restart();
+        }
+        race.Draw(W, H);
+        if (frames >= 0 && frame == frames - 1 && shot) {
+            glFinish();
+            SaveBmp(shot, W, H);
+            const MtxFx43 &m = race.car->matrix;
+            printf("frame %d pos=%d,%d,%d speed=%d gear=%d\n", frame, m.m[3][0], m.m[3][1], m.m[3][2],
+                   race.car->speed, race.car->engine->gear);
+        }
+        SDL_GL_SwapWindow(win);
+        if (frames < 0) {
+            next += STEP_MS;
+            u32 now = SDL_GetTicks();
+            if (next > now)
+                SDL_Delay(next - now);
+            else
+                next = now;
+        }
+    }
+    SDL_Quit();
+    return 0;
+}
