@@ -576,7 +576,6 @@ essayer sur la console, ce que l'automatisation n'a pas le droit de faire) :
   its guard band, which large track triangles near the camera do; PPSSPP does not emulate this, so the screenshot
   checks could not see it. The sceGu back-end now splits triangles along their longest edge until every edge is at
   most 3 world units (`G3_GU_MAX_EDGE`): vertex arrays 0.26 -> 1.5 MB, heap 4.2 MB, PPSSPP image and car/camera
-  state unchanged. To confirm on the console; if pieces still drop, lower the limit or clip near triangles on the
-  CPU.
+  state unchanged. **Confirmed on the PSP-3000 by the user: steering correct, the track no longer vanishes.**
 - The package now holds only `vfs.zip`, `vfs.bin` and `vfs.dat` (26.9 MB): the race reads nothing else (checked
   in PPSSPP from the package folder).
