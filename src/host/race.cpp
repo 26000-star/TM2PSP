@@ -7,8 +7,8 @@
 // parameters, engine and the full dsCarDynamics step (3b, 3c), and the race progress (dsRaceProgress: countdown,
 // checkpoints, laps, finish, respawn), two 1/60 s ticks per 30 Hz frame as on the DS. The drawing is the host G3D
 // stand-in (src/shim/host/g3d_gl.cpp) fed with the game's own models and piece matrices, seen from the game's
-// chase camera (config/cameras, dsChaseCamera); the HUD is still to port: the race state is shown in the window
-// title and on stdout.
+// chase camera (config/cameras, dsChaseCamera); the game's HUD is still to port: the race state is shown in the window
+// title and on stdout; a bitmap-font HUD stand-in draws the clock, checkpoints, laps and messages.
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -265,6 +265,125 @@ void Race::Draw(int w, int h)
 }
 
 // Stand-in for the HUD: checkpoints, laps, clock, countdown and messages in the window title.
+// ---- host HUD stand-in: a 5 x 7 bitmap font drawn as GL quads (the game's HUD sprites are not ported) ----
+struct Glyph {
+    char c;
+    const char *rows[7];
+};
+static const Glyph kFont[] = {
+    {'0', {"01110", "10001", "10011", "10101", "11001", "10001", "01110"}},
+    {'1', {"00100", "01100", "00100", "00100", "00100", "00100", "01110"}},
+    {'2', {"01110", "10001", "00001", "00010", "00100", "01000", "11111"}},
+    {'3', {"11110", "00001", "00001", "01110", "00001", "00001", "11110"}},
+    {'4', {"00010", "00110", "01010", "10010", "11111", "00010", "00010"}},
+    {'5', {"11111", "10000", "11110", "00001", "00001", "10001", "01110"}},
+    {'6', {"00110", "01000", "10000", "11110", "10001", "10001", "01110"}},
+    {'7', {"11111", "00001", "00010", "00100", "01000", "01000", "01000"}},
+    {'8', {"01110", "10001", "10001", "01110", "10001", "10001", "01110"}},
+    {'9', {"01110", "10001", "10001", "01111", "00001", "00010", "01100"}},
+    {':', {"00000", "00100", "00100", "00000", "00100", "00100", "00000"}},
+    {'.', {"00000", "00000", "00000", "00000", "00000", "01100", "01100"}},
+    {'/', {"00001", "00010", "00010", "00100", "01000", "01000", "10000"}},
+    {'!', {"00100", "00100", "00100", "00100", "00100", "00000", "00100"}},
+    {'A', {"01110", "10001", "10001", "11111", "10001", "10001", "10001"}},
+    {'C', {"01110", "10001", "10000", "10000", "10000", "10001", "01110"}},
+    {'E', {"11111", "10000", "10000", "11110", "10000", "10000", "11111"}},
+    {'G', {"01110", "10001", "10000", "10111", "10001", "10001", "01111"}},
+    {'I', {"01110", "00100", "00100", "00100", "00100", "00100", "01110"}},
+    {'K', {"10001", "10010", "10100", "11000", "10100", "10010", "10001"}},
+    {'M', {"10001", "11011", "10101", "10101", "10001", "10001", "10001"}},
+    {'N', {"10001", "11001", "10101", "10011", "10001", "10001", "10001"}},
+    {'O', {"01110", "10001", "10001", "10001", "10001", "10001", "01110"}},
+    {'P', {"11110", "10001", "10001", "11110", "10000", "10000", "10000"}},
+    {'Q', {"01110", "10001", "10001", "10001", "10101", "10010", "01101"}},
+    {'R', {"11110", "10001", "10001", "11110", "10100", "10010", "10001"}},
+    {'S', {"01111", "10000", "10000", "01110", "00001", "00001", "11110"}},
+    {'T', {"11111", "00100", "00100", "00100", "00100", "00100", "00100"}},
+    {'U', {"10001", "10001", "10001", "10001", "10001", "10001", "01110"}},
+    {'V', {"10001", "10001", "10001", "10001", "10001", "01010", "00100"}},
+};
+
+static void DrawText(float x, float y, float px, const char *s, float r, float g, float b)
+{
+    for (int pass = 0; pass < 2; pass++) { // shadow, then the text
+        float o = pass == 0 ? px * 0.5f : 0;
+        if (pass == 0)
+            glColor3f(0, 0, 0);
+        else
+            glColor3f(r, g, b);
+        glBegin(GL_QUADS);
+        float cx = x;
+        for (const char *p = s; *p; p++, cx += 6 * px) {
+            const Glyph *gl = nullptr;
+            for (const Glyph &f : kFont)
+                if (f.c == *p)
+                    gl = &f;
+            if (!gl)
+                continue;
+            for (int row = 0; row < 7; row++)
+                for (int col = 0; col < 5; col++)
+                    if (gl->rows[row][col] == '1') {
+                        float x0 = cx + col * px + o, y0 = y + row * px + o;
+                        glVertex2f(x0, y0);
+                        glVertex2f(x0 + px, y0);
+                        glVertex2f(x0 + px, y0 + px);
+                        glVertex2f(x0, y0 + px);
+                    }
+        }
+        glEnd();
+    }
+}
+
+// Clock, checkpoints and laps in the corners, the countdown and the race messages in the middle.
+static void DrawHud(int w, int h, const dsRaceProgress &rp)
+{
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, w, h, 0, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
+    fx32 t = rp.finished ? rp.finishTime : rp.clock;
+    int cs = (int)(((s64)(t & 0xfff) * 100) >> 12), sec = t >> 12;
+    char buf[64];
+    if (!rp.countdown) {
+        snprintf(buf, sizeof buf, "%d:%02d.%02d", sec / 60, sec % 60, cs);
+        DrawText(w - 6 * 4 * 9 - 12, 12, 4, buf, 1, 1, 1);
+    }
+    int cps = rp.checkpointCount - (rp.startPiece && rp.startPiece->type == PIECE_MULTILAP ? 1 : 0);
+    int passed = 0;
+    for (const dsTrigger *tr : rp.Triggers())
+        if (tr->kind == dsTrigger::CHECKPOINT && !tr->pending)
+            passed++;
+    snprintf(buf, sizeof buf, "CP %d/%d", passed, cps);
+    DrawText(12, 12, 4, buf, 1, 0.9f, 0.3f);
+    if (rp.lapCount > 1) {
+        snprintf(buf, sizeof buf, "TOUR %d/%d", rp.finished ? rp.lapCount : rp.lapsDone + 1, rp.lapCount);
+        DrawText(12, 50, 4, buf, 1, 0.9f, 0.3f);
+    }
+    const dsRaceEvent *last = rp.events.empty() ? nullptr : &rp.events.back();
+    if (rp.countdown) {
+        snprintf(buf, sizeof buf, "%d", sec + 1);
+        DrawText(w / 2 - 6 * 12 / 2, h / 3, 12, buf, sec >= 1 ? 1.0f : 1.0f, sec >= 1 ? 0.25f : 0.8f, 0.2f);
+    } else if (rp.finished) {
+        DrawText(w / 2 - 6 * 8 * 8 / 2, h / 3, 8, "ARRIVEE!", 0.3f, 1, 0.3f);
+    } else if (last && rp.clock - last->time < 0x2000) {
+        if (last->type == dsRaceEvent::GO)
+            DrawText(w / 2 - 6 * 12 * 3 / 2, h / 3, 12, "GO!", 0.3f, 1, 0.3f);
+        else if (last->type == dsRaceEvent::MISSED) {
+            snprintf(buf, sizeof buf, "%d CP MANQUE%s", last->value, last->value > 1 ? "S" : "");
+            DrawText(w / 2 - 6 * 5 * (int)strlen(buf) / 2, h / 3, 5, buf, 1, 0.3f, 0.3f);
+        } else if (last->type == dsRaceEvent::CHECKPOINT || last->type == dsRaceEvent::LAP) {
+            int ls = last->time >> 12, lc = (int)(((s64)(last->time & 0xfff) * 100) >> 12);
+            snprintf(buf, sizeof buf, "%d:%02d.%02d", ls / 60, ls % 60, lc);
+            DrawText(w / 2 - 6 * 6 * (int)strlen(buf) / 2, h / 3, 6, buf, 0.4f, 0.8f, 1);
+        }
+    }
+    glEnable(GL_DEPTH_TEST);
+}
+
 static void UpdateTitle(SDL_Window *win, const dsRaceProgress &rp)
 {
     fx32 t = rp.finished ? rp.finishTime : rp.clock;
@@ -377,6 +496,7 @@ int main(int argc, char **argv)
         race.cams[race.camIndex].Update(*race.car); // camera vtable +0x1c, once per frame
         UpdateTitle(win, *race.progress);
         race.Draw(W, H);
+        DrawHud(W, H, *race.progress);
         if (frames >= 0 && frame == frames - 1 && shot) {
             glFinish();
             SaveBmp(shot, W, H);

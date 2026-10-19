@@ -324,7 +324,7 @@ path (piece budget, replacing earlier terrain pieces) is not ported. Grid lookup
 (two 1/60 s ticks per frame): track scene and piece placement, collision world, car parameters, engine, the full
 car step and the race progress, driven from the keyboard (arrows; Backspace = last checkpoint, Enter = restart). `--frames N --shot out.bmp [--auto]` renders N steps off-screen and saves the
 last frame, which is how the renderer was checked (see `docs/host_race.png`: easy/0, 2 s after "go" at full
-throttle, from the game's Chase1 camera).
+throttle, from the game's Chase1 camera, with the host HUD).
 
 - **SDL2** 2.30.12 is built as a static library from the official source release, whose GPG signature was checked
   against Sam Lantinga's key (fingerprint 1528 635D 8053 A57F 77D1 E086 30A5 9377 A776 3BE6), into
@@ -334,8 +334,9 @@ throttle, from the game's Chase1 camera).
   display lists replayed as OpenGL 1.x primitives; all DS texture formats decoded (tex4x4 included); polygon
   attributes give culling (DS front faces are counter-clockwise in GL terms) and alpha. Track pieces take their
   materials from `material.bin` + `texturebatch.n` (format in ASSETS.md).
-- Start, respawn, countdown, checkpoints, laps and finish: dsRaceProgress (next section); the race state is shown in
-  the window title (stand-in for the HUD) and the events on stdout.
+- Start, respawn, countdown, checkpoints, laps and finish: dsRaceProgress (next section); the race state is drawn
+  by a host HUD stand-in (5 x 7 bitmap font: clock, checkpoints, laps, countdown, messages), also in the window
+  title, and the events go to stdout.
 - Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread, the shadow quads and a
   large "cone" shape. The visual update (0x02126d10: steering angle WheelTurnVisual x steer x the steer scale,
   wheel spin, wheel surfaces, per-wheel matrices `wheelMatrix`/`wheelSideMatrix` from the display matrix +0x1f0)
@@ -424,6 +425,26 @@ extreme/0. tm_race draws through it (C switches Chase1/Chase2; restart and respa
   the full vertical angle. The base camera's fade and FOV ramp (0x0208e524) and the camera manager that picks and
   blends cameras (ov003 0x020fb0f0 / 0x020fb3a4 / 0x020fb450: start, finish, replay cameras) are not ported.
 
+## Bilan de la phase 3 (rapport, 2026-10-19)
+
+**Objectif atteint : une course Coast se joue sur l'hôte Windows.** `tm_race --root extract/files --track easy/0`
+(n'importe laquelle des 26 pistes Coast) charge la piste et son terrain, place la voiture sur le départ, lance le
+compte à rebours de 3 s, puis on pilote au clavier (flèches) la vraie physique du jeu (pas de 1/60 s, deux par image
+à 30 Hz) vue par la caméra poursuite du jeu (`config/cameras`, C pour Chase1/Chase2) ; les checkpoints, les tours,
+l'arrivée (« N CP manqués » si on en saute), le respawn au dernier checkpoint (Retour arrière, ou automatiquement
+quand la voiture coule ou reste bloquée) et le redémarrage (Entrée) suivent le code du jeu ; un HUD de substitution
+affiche chrono, checkpoints, tours, compte à rebours et messages.
+
+Chaque tranche est vérifiée contre une référence indépendante (lecture Python des scripts unluac, des `.h`, des
+tables de la ROM) : carParams (320 valeurs), pistes/collisions/éclairage (26 pistes), terrain (26), requêtes de
+collision (16 722 sondes), moteur (4 voitures), chute/accélération/freinage, triggers (26 pistes, 49 sondes par
+porte), progression de course (26 pistes), caméras (8 + 238 recherches) et comportement caméra : 0 erreur partout.
+
+Reste pour une fidélité complète (non bloquant pour jouer) : le HUD du jeu (sprites, feux, temps intermédiaires),
+l'éclairage DS (`config/tracks`), le ciel et la mer, les roues/ombre de la voiture, le gestionnaire de caméras
+(départ, arrivée, replay), la boucle `main()` et les menus, le son, et une trace melonDS pour comparer la physique
+au bit près. La phase 4 (back-ends PSP du shim) peut démarrer sur cette base.
+
 ## Next slices
 
 1. The camera manager (ov003 0x020fb450: start/finish/replay cameras, BumperCam), the race grid itself (main 0x0208cb80 + the per-cell bytes), car/car
@@ -433,5 +454,6 @@ extreme/0. tm_race draws through it (C switches Chase1/Chase2; restart and respa
    DS lighting from `config/tracks` (the eight colours), sky and sea from the environment loader (main
    0x02099e6c), then the same G3 path on the PSP (TMPM from phase 2).
 3. Main loop from `main()` (0x02003000) and the game state machine around the race mode (menus, results);
-   HUD (lights, clock, checkpoint times from the HUD object *0x02137830).
+   the game's HUD (lights, clock, checkpoint times from the HUD object *0x02137830) in place of tm_race's
+   bitmap-font stand-in.
 4. Dynamic coverage trace in melonDS to rank the 4,200 race functions.
