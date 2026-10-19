@@ -85,3 +85,36 @@ ov003:02100b2c dsTerrain_Build
 0205ad60 dsRandom_Next
 02069154 dsLuaObject_FieldString
 020691a0 dsLuaObject_IndexString
+
+# ---- collision queries (slice 3a) ----
+01ffc3c4 dsCollision_RayTriangle
+01ffb834 dsCollisionMesh_GatherBox
+01ffbb3c dsCollisionMeshShape_TestSegmentBatch
+020673c4 dsCollisionMeshShape_TestSegment
+0205b16c dsCollisionMeshShape_SetMatrix
+0205b03c dsCollisionPlane_SetMatrix
+01ffa924 dsVec_MulMtx43
+01ffb3ac dsCollisionHitList_PushBack
+0202c4c4 FX_DivFx64c
+0202c500 FX_InvFx64c
+
+# ---- car dynamics (ov003, slice 3) ----
+ov003:0212bd68 dsCarDynamicsList_Update
+ov003:021222fc dsCarDynamics_Step
+ov003:0212b3c4 dsCarDynamics_ctor
+ov003:0212b0b0 dsCarDynamics_Reset
+ov003:021279e8 dsCarDynamics_Place
+ov003:02122a3c dsCarDynamics_SetCar
+ov003:0212696c dsCarDynamics_LoadParams
+ov003:021266ec dsCarDynamics_BuildWheels
+ov003:02124fa0 dsCarDynamics_Collide
+ov003:02124d54 dsCarDynamics_AddWheelProbe
+ov003:021245f4 dsCarDynamics_AddBodyProbe
+ov003:02124910 dsCarDynamics_WheelContact
+ov003:02123fac dsCarDynamics_BodyContact
+ov003:021233d0 dsCarDynamics_Impulse
+ov003:02122b54 dsCarDynamics_Surfaces
+ov003:02122730 dsCarContacts_Reset
+ov003:0212286c dsCarContacts_ctor
+ov003:0212bdc0 dsCarDynamicsList_Create
+ov003:0212be7c dsCarParamsTable_FindByName

@@ -190,7 +190,8 @@ def check_mesh(model, got):
         if got["grid"] != "%d,%d,%d" % grid[0:3] or got["min"] != "%d,%d,%d" % grid[3:6] or \
                 got["size"] != "%d,%d,%d" % grid[6:9]:
             err("mesh %s: grid %s %s %s, expected %s" % (model, got["grid"], got["min"], got["size"], grid))
-        cs = ",".join(str(int(grid[6 + i] * 4096 / (grid[i] << 12))) for i in range(3))
+        # FX_Div: 32.32 quotient (truncated) rounded to 20.12
+        cs = ",".join(str((((grid[6 + i] << 32) // (grid[i] << 12)) + (1 << 19)) >> 20) for i in range(3))
         if got["cell"] != cs:
             err("mesh %s: cell size %s, expected %s" % (model, got["cell"], cs))
     # cell lists

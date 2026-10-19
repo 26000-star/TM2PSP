@@ -210,11 +210,39 @@ requires it to fall inside the piece's footprint cells, which validates the rota
 - `Scripts/config/tracks` global `tracks["<env>_<tod>"]`: eight RGB colours (fx32 0..1) at a 16-byte stride, then
   two scalars (entry 24 × 41/4096 → +0xe0, entry 25 → +0xdc). Meaning of each colour to be found with the renderer.
 
+## Vertical slice 3a: collision queries (done)
+
+`tm_physics --root extract/files --track easy/0 --raycast` builds the collision world of a Coast track (one mesh shape
+per placed piece, placed with the piece matrix) and casts batches of vertical and slanted probes over every piece,
+the way the car casts its wheel and body probes. `tools/host/check_raycast.py` reads the `.h` files itself and
+intersects every probe with every triangle: **26 Coast tracks, 16,722 probes, 15,292 hits, 0 errors** (11 probes
+graze a triangle edge and are not counted). Hits match on the set of pieces, material, normal (8/4096) and distance
+(1/64 unit against the game's own plane and local ray, max(0.1, 0.5 %) against the exact world-space plane).
+
+- **SDK rounding fixed in the shim**: `FX_Div`/`FX_Inv` round the 32.32 quotient, `(q + 2^19) >> 20`
+  (`FX_GetDivResult` 0x0202c584); `FX_Sqrt` is the 64-bit root of `x << 32` rounded `(r + 0x200) >> 10`. Slice 1 and
+  2 checks are unchanged (they do not depend on the last bit). `MTX_Inverse43` reproduces the SDK's mix of rounded
+  first-row cofactors and truncated products.
+- World (`*0x020c8e78`): the car sets the masks (vtable +0x24: include 1, exclude 0), adds up to 10 segments
+  (`{origin, unit dir, length, hit list}`, +0x28 keeps their bounding box) and tests them (+0x2c): shapes are visited
+  from the last added; mesh shapes take the whole batch (+0x1c), other shapes one segment at a time (+0x00).
+- Mesh batch test (itcm 0x01ffbb3c): the batch box is moved to the mesh's space (inverse matrix), the triangles of
+  the grid cells it overlaps are gathered once (itcm 0x01ffb834, y/x/z order, all triangles without a grid), each
+  probe is moved to local space too (12 scratch slots in the shape, so at most 12 probes per batch), and each pair
+  goes through the ray/triangle test; the nearest hit per probe is appended with its world point, the triangle's
+  stored normal rotated back, its material and the shape.
+- Ray/triangle (itcm 0x01ffc3c4): front faces only (`n·d < -16`, raw 64-bit dot products), barycentric bounds
+  without division, `t = (n·s · (2^56 / -n·d)) >> 44` using the 64/64 divider started at the top. The local probe
+  direction is truncated to 1/4096, so grazing hits on walls move by up to 0.05 unit, as on the DS.
+- Plane shape (type 3, 0x0205b510/0x0205b19c): `n·p = d`, used for the Coast sea level; hit t from `FX_Div`.
+- Not ported yet: the single-segment mesh query 0x020673c4 (grid DDA 0x01ffe3ec, used by cameras), pair tests
+  between shapes (0x0205b3c0).
+
 ## Next slices
 
-1. **Car physics update** (ov003, consumer of `dsCarParams`), the collision queries it uses (segment DDA 0x01ffe3ec,
-   mesh shape tests, terrain), cameras (`config/cameras`). Deterministic unit tests (car dropped on a flat piece
-   settles, then accelerates).
+1. **Car physics update** (ov003 `dsCarDynamics_Step` 0x021222fc and its 80 callees, 0x021220a0..0x0212bed0 and
+   wheels/engine 0x0212e010..0x0212f324; notes in the slice-3 hand-over), cameras (`config/cameras`). Deterministic
+   unit tests (car dropped on a flat piece settles, then accelerates).
 2. Terrain builder (ov003 0x02100b2c and callees) so Coast cliffs and beaches exist for collision and display.
 3. Renderer: Firebrand's BMD0/G3 path onto an OpenGL host back-end (TMPM from phase 2 for the PSP); environment
    assets (main 0x02099e6c: `texturebatch.n`, `material.bin`, sky, sea).

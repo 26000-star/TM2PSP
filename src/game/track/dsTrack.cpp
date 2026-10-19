@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "collision/dsCollisionWorld.h"
 #include "math/dsMath.h"
 #include "script/dsLua.h"
 #include "track/dsPieceData.h"
@@ -140,6 +141,27 @@ void dsTrackPiece::UpdateTransform()
     matrix.m[3][0] = x;
     matrix.m[3][1] = pos.y;
     matrix.m[3][2] = z;
+}
+
+dsTrackPiece::~dsTrackPiece()
+{
+    if (collision) {
+        dsCollisionWorld::Get()->RemoveShape(collision);
+        delete collision;
+    }
+}
+
+// @port ov003:0211fe08 partial (collision part)
+void dsTrackPiece::CreateCollision()
+{
+    if (collision || modelPath.empty())
+        return;
+    std::shared_ptr<dsCollisionMesh> mesh = dsCollisionWorld::Get()->LoadMesh(modelPath);
+    if (!mesh)
+        return;
+    collision = new dsCollisionMeshShape(mesh, 0xffffffff);
+    collision->SetMatrix(matrix);
+    dsCollisionWorld::Get()->AddShape(collision);
 }
 
 dsTrack::~dsTrack()

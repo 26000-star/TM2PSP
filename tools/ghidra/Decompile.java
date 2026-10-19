@@ -2,6 +2,8 @@
 // A selector is a function name, an address (0x02012345 or ov003:0x020f8000), or
 // "str:<text>" for every function that references a string containing <text>, or
 // "callers:<selector>" for the callers of the selected functions.
+// With an output file ending in ".asm", writes the disassembly of the functions instead (address, bytes,
+// instruction), which shows the arguments the decompiler sometimes drops.
 //@category TM2PSP
 
 import java.io.PrintWriter;
@@ -19,6 +21,8 @@ import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.Symbol;
 
@@ -30,6 +34,20 @@ public class Decompile extends GhidraScript {
 		Set<Function> targets = new LinkedHashSet<>();
 		for (int i = 1; i < args.length; i++) {
 			targets.addAll(select(args[i]));
+		}
+		if (args[0].endsWith(".asm")) {
+			try (PrintWriter w = new PrintWriter(args[0], "UTF-8")) {
+				for (Function f : targets) {
+					w.printf("// ==== %s @ %s ====%n", f.getName(), f.getEntryPoint());
+					InstructionIterator it = currentProgram.getListing().getInstructions(f.getBody(), true);
+					while (it.hasNext()) {
+						Instruction ins = it.next();
+						w.printf("%s  %s%n", ins.getAddress(), ins.toString());
+					}
+				}
+			}
+			println("Decompile: " + targets.size() + " functions disassembled to " + args[0]);
+			return;
 		}
 		DecompInterface di = new DecompInterface();
 		DecompileOptions opts = new DecompileOptions();

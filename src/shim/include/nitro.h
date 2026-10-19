@@ -56,6 +56,7 @@ typedef struct { fx32 m[4][3]; } MtxFx43;
 fx32 VEC_DotProduct(const VecFx32 *a, const VecFx32 *b);
 void VEC_CrossProduct(const VecFx32 *a, const VecFx32 *b, VecFx32 *out);
 void MTX_RotY43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal);
+int MTX_Inverse43(const MtxFx43 *src, MtxFx43 *dst); /* 0 on success, -1 when singular */
 
 /* ---- FS: ROM file system (backed by a host directory) ---- */
 typedef enum { FS_SEEK_SET = 0, FS_SEEK_CUR = 1, FS_SEEK_END = 2 } FSSeekFileMode;

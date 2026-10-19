@@ -34,6 +34,9 @@ public:
 
     void SetPosition(const VecFx32 &pos);              // ov003 0x0211fe08 (partial: cells + model choice)
     void UpdateTransform();                            // ov003 0x0211f088 + the rotation of 0x0211f2f0
+    // Loads graphics/<modelPath>.h as a mesh shape placed with the piece matrix and adds it to the collision world
+    // (the shape creation of ov003 0x0211fe08: world vtable +0x14 then shape vtable +0x08).
+    void CreateCollision();
 
     s32 id;                     // +0x04 piece id (-1 = test arrow)
     s32 type = 0;               // +0x08 dsPieceType
@@ -45,6 +48,8 @@ public:
     bool air = false;           // +0x76 uses the "air" model (above the ground level)
     std::string modelPath;      // +0x0c "Tracks/<env>/<model name>" (collision: graphics/<path>.h)
     MtxFx43 matrix;             // model +0x20: rotation, and translation = pos moved to the footprint corner
+    class dsCollisionMeshShape *collision = nullptr; // +0x7c
+    ~dsTrackPiece();
 };
 
 class dsTerrainFilter;
