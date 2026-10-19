@@ -529,8 +529,41 @@ at 480 x 272, 8888 colour, 16-bit depth.
   (host 0.25) for the 16-bit depth buffer.
 - Screenshots under PPSSPP: the frame must be copied out of VRAM with `sceDmacMemcpy` (PPSSPP renders on the host
   GPU and writes VRAM back on DMA/GE copies, not on CPU reads; a CPU read returned a frame several seconds old).
+- `powershell -ExecutionPolicy Bypass -File tools/psp/package.ps1` fills `build/psp/package/PSP/GAME/TM2PSP`
+  (EBOOT, `files/`, `track.txt`, `LISEZMOI.txt`; 33 MB, not in git) for the user to copy to the memory stick.
+- Also checked: coa/hard/0 (3 laps), 600 frames: car and camera identical to the host, 4.3 ms update + 3.0 ms list
+  build per frame, heap 2.9 MB.
 - Measured on PPSSPP (coa/easy/0, 150 frames, auto): load 0.58 s; per frame 3.6 ms race update (2 ticks), 2.6 ms
   to build the GE list; the GE wait is not meaningful in PPSSPP (it does not time the GE). 1 late frame of 150 (the
   first, which converts the display lists). Memory: heap 2.9 MB in use (textures 1.7 MB, vertex arrays 0.26 MB),
   far below the 52 MB extended partition: the 32 MB PSP-1000 (about 24 MB free) fits too. **Real-hardware speed is
   not verified.**
+
+## Bilan de la phase 4 (rapport, 2026-10-19)
+
+**Objectif atteint : la course Coast se joue dans PPSSPP depuis un EBOOT prêt à copier sur la PSP-3000.**
+`build/psp/tm_race/EBOOT.PBP` (paquet complet : `tools/psp/package.ps1` -> `build/psp/package/PSP/GAME/TM2PSP`)
+charge la piste et son terrain, lance le compte à rebours et fait tourner la vraie physique du jeu (2 pas de 1/60 s
+par image à 30 Hz), la progression de course et la caméra poursuite, dessinées par sceGu en 480 x 272, avec le HUD
+de substitution ; commandes sceCtrl (croix, carré, croix directionnelle ou stick, triangle, START, SELECT).
+
+Vérifications : 
+- le code du jeu n'a pas changé pour la PSP (seuls `src/shim/psp`, `src/psp`, `src/app`, CMake et les outils sont
+  nouveaux) et compile sans avertissement ;
+- les 114 vérifications de l'hôte tournent sur la PSP (PPSSPP) : 2,1 Mo de sorties **identiques octet pour octet** à
+  l'hôte, 0 erreur des vérificateurs ;
+- la course complète (boucle, entrée, caméra) donne après 150 images (easy/0) et 600 images (hard/0, 3 tours)
+  **le même état de voiture et de caméra** que l'hôte ; l'image PSP montre la même scène (`docs/psp_race.png`) ;
+- l'hôte reste à 0 erreur (`tools/host/run_checks.py`) et son rendu est identique au pixel près après la
+  séparation G3D commun / back-ends.
+
+Mesures (PPSSPP, vitesse de CPU PSP émulée ; **vitesse réelle sur console non vérifiée**) : ~7 ms de CPU par image
+sur 33 ms disponibles, chargement 0,6 s, tas 2,9 Mo sur 52 Mo (le PSP-1000 32 Mo devrait suffire aussi). Le temps du
+GE n'est pas mesurable dans PPSSPP.
+
+Reste à faire (étape suivante pour l'utilisateur : copier `build\psp\package\PSP` sur la Memory Stick et
+essayer sur la console, ce que l'automatisation n'a pas le droit de faire) :
+- mesurer sur la vraie PSP (touche R : temps de mise à jour / construction de liste / attente GE) ; si le GE est
+  trop lent : sommets 16 bits, textures en VRAM, culling des pièces hors champ ;
+- fidélité (inchangé depuis la phase 3) : HUD du jeu, éclairage DS (`config/tracks`), ciel, roues/ombre, menus,
+  son (sceAudio), gestionnaire de caméras ; sur PSP en plus : brouillard et éventuelle profondeur 16 bits à affiner.

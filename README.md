@@ -189,7 +189,7 @@ python -P tools/host/run_checks.py
 python -P tools/analysis/port_status.py --race-only
 ```
 
-## Phase 4: PSP back-ends (in progress)
+## Phase 4: PSP back-ends (done: the race runs in PPSSPP)
 
 - **The game libraries build for the PSP** (`bash tools/psp_build.sh`: psp-cmake + pspdev in WSL, 0 warnings) with
   the shim's PSP back-ends (`src/shim/psp`: sceIo file system, OS services).
@@ -208,3 +208,14 @@ bash tools/psp_build.sh
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/psp/run_checks_psp.ps1
 ```
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/psp/race_shot.ps1
+```
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/psp/package.ps1
+```
+
+The last one fills `build/psp/package/PSP/GAME/TM2PSP` (EBOOT + the game files from your ROM): copy its `PSP`
+folder to the root of a memory stick (custom firmware needed). Real-hardware speed is not verified yet.
