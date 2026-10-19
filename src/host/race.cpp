@@ -170,14 +170,20 @@ bool Race::Load(const char *trackName)
         return false;
     car.reset(new dsCarDynamics("coa", &geo));
     car->LoadParams(prm);
+    car->pieceRotationAt = [this](const VecFx32 &p) { return track.PieceRotationAt(p); };
 
     // Start: the first start piece; the car stands 2 units along x from the piece position, on the platform.
     const dsTrackPiece *start = nullptr;
     for (const dsTrackPiece *p : track.pieces)
         if (!start && p->info && p->info->type == PIECE_START)
             start = p;
-    if (!start)
+    for (const dsTrackPiece *p : track.pieces) // lap tracks start on their multilap piece
+        if (!start && p->info && p->info->type == PIECE_MULTILAP)
+            start = p;
+    if (!start) {
+        fprintf(stderr, "no start piece\n");
         return false;
+    }
     VecFx32 c = {start->pos.x + 0x2000, 0, start->pos.z};
     fx32 gy = start->matrix.m[3][1];
     GroundAt(c.x, start->matrix.m[3][1] + 0x4000, c.z, &gy);

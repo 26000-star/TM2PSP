@@ -1,5 +1,7 @@
 #include "dsTrack.h"
 
+#include <utility>
+
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
@@ -229,4 +231,25 @@ bool dsTrack::LoadScene(const char *name, bool withPieces)
     }
     delete filter;
     return true;
+}
+
+// @port main:0208d404 partial (footprint walk instead of the grid bytes, see dsTrack.h)
+int dsTrack::PieceRotationAt(const VecFx32 &p) const
+{
+    const dsRaceSetup *setup = dsRaceSetup::Get();
+    fx32 cw = setup->cellWidth << 12, ch = setup->cellHeight << 12;
+    if (cw == 0 || ch == 0 || p.x < 0 || p.y < 0 || p.z < 0)
+        return -1;
+    s32 c[3] = {FX_Div(p.x, cw) >> 12, FX_Div(p.y, ch) >> 12, FX_Div(p.z, cw) >> 12};
+    for (const dsTrackPiece *pc : pieces) {
+        if (!pc->info)
+            continue;
+        int w = pc->info->width, d = pc->info->depth, h = pc->info->height;
+        if (pc->rotation & 1)
+            std::swap(w, d);
+        if (c[0] <= pc->cell[0] && pc->cell[0] - w < c[0] && pc->cell[2] <= c[2] && c[2] < pc->cell[2] + d &&
+            pc->cell[1] <= c[1] && c[1] < pc->cell[1] + h)
+            return pc->rotation;
+    }
+    return -1;
 }

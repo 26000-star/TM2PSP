@@ -201,6 +201,7 @@ static int Drop(dsTrack &t, const char *carName)
     }
     dsCarDynamics car(carName, &geo);
     car.LoadParams(prm);
+    car.pieceRotationAt = [&t](const VecFx32 &p) { return t.PieceRotationAt(p); };
     car.Reset();
     MtxFx43 m;
     MTX_RotY43_(&m, dsSin(start->rotation * 6434), dsCos(start->rotation * 6434));

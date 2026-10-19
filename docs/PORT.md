@@ -300,7 +300,8 @@ and then reverses. Two runs give identical output.
   the stuck test uses `_dcmpgt(up.y, 0.0)`; `cos(pi)` makes the steep-front-ground branch of Drive dead code.
 - Not ported: replay modes 1/2 targets (+0x424/+0x448), the visual update 0x02126d10 except the wheel surfaces,
   sparks and debug lines, the owner vehicle's booster flag. Boosters (material 7) need the race grid lookup
-  (main 0x0208d404): the port takes it as a callback (`pieceRotationAt`), not wired in the test driver yet.
+  (main 0x0208d404): the port takes it as a callback (`pieceRotationAt`), served by `dsTrack::PieceRotationAt`,
+  which walks the piece footprints instead of keeping the game's per-cell byte grid (partial).
 
 ## Slice 4a: host race window (first pass)
 
@@ -317,6 +318,8 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
   display lists replayed as OpenGL 1.x primitives; all DS texture formats decoded (tex4x4 included); polygon
   attributes give culling (DS front faces are counter-clockwise in GL terms) and alpha. Track pieces take their
   materials from `material.bin` + `texturebatch.n` (format in ASSETS.md).
+- Start: the first start piece, or the multilap piece on lap tracks; the car is placed two units along x from the
+  piece position (the game's start positions come from the piece's InitPos/helpers, not ported).
 - Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread at the origin, the shadow
   quads and a large "cone" shape that the game positions or hides itself in the visual update (0x02126d10).
 - Not ported yet (stand-ins in tm_race): main loop/race manager (`main()` 0x02003000), cameras (`config/cameras`,
@@ -325,7 +328,7 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
 
 ## Next slices
 
-1. **Cameras** (`config/cameras`), the race grid lookup for boosters (main 0x0208d404 / 0x0208cb80), car/car
+1. **Cameras** (`config/cameras`), the race grid itself (main 0x0208cb80 + the per-cell bytes), car/car
    contacts (the +0x248 sums), and a dynamic trace of `dsCarDynamics_Step` in melonDS to compare the port bit for
    bit (the drop test only checks behaviour).
 2. Terrain builder (ov003 0x02100b2c and callees) so Coast cliffs and beaches exist for collision and display.

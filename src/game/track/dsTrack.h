@@ -60,6 +60,12 @@ public:
     // Runs scene <name> and fills the header; with pieces != NULL also places its pieces. ov003 0x0211b404.
     bool LoadScene(const char *name, bool withPieces);
 
+    // Rotation of the piece whose footprint holds the cell of pos, -1 when none. Stand-in for the race grid
+    // lookup main 0x0208d404 (0x0208cb80 maps the position to a cell, then a byte per cell names the piece);
+    // the port walks the footprints instead of keeping the grid (W x D cells towards -x and +z of the origin
+    // cell, swapped for odd rotations, H cells up).
+    int PieceRotationAt(const VecFx32 &pos) const;
+
     dsTrackInfo info;
     std::vector<dsTrackPiece *> pieces;
 };
