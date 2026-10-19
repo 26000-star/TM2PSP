@@ -28,6 +28,16 @@ struct dsCarModelGeometry {
     bool Load(const std::string &car, int skin, const dsCarParams &p);
 };
 
+// Driver input, 0x1c bytes at +0x404 (set by 0x02122b10, which also selects input mode 3).
+struct dsCarInput {
+    fx32 accel = 0;                 // +0x404 0..1
+    fx32 brake = 0;                 // +0x408 0..1
+    fx32 steer = 0;                 // +0x40c -1..1
+    fx32 pitch = 0;                 // +0x410 -1..1 (second steering axis, air control)
+    u8 flag = 0;                    // +0x414
+    s32 unk418 = 0, unk41c = 0;     // +0x418 +0x41c
+};
+
 class dsCarDynamics {
 public:
     dsCarDynamics(const std::string &car, const dsCarModelGeometry *model); // ov003 0x0212b3c4
@@ -38,6 +48,9 @@ public:
     void ReadModelBox();                           // ov003 0x02126628
     void Reset();                                  // ov003 0x0212b0b0
     void Place(const MtxFx43 &m, bool updateVisual, bool warmUp); // ov003 0x021279e8
+    void SetInput(const dsCarInput &in);           // ov003 0x02122b10
+    // Steering and throttle smoothing, forward speed, speed limit. ov003 0x02127af8
+    void UpdateInputs();
 
     dsCarParams p;                                 // +0x000 (0x1c0)
     MtxFx43 matrix;                                // +0x1c0 rows: right, up, forward, position
@@ -66,6 +79,7 @@ public:
     fx32 steerAccum = 0;                           // +0x3e4
     s32 orthoRow = 0;                              // +0x3fc
     fx32 unk400 = 0;                               // +0x400
+    dsCarInput input;                              // +0x404
     s32 inputMode = 0;                             // +0x420 0 none, 1/2 replay, 3 player
     fx32 wheelTurn = 0;                            // +0x454
     fx32 skid = 0;                                 // +0x458
@@ -80,6 +94,7 @@ public:
     VecFx32 halfSize = {};                         // +0x4c4
     fx32 probeLength = 0;                          // +0x4d0 wheel probe length
     fx32 wheelLowering = 0;                        // +0x4e4 (-0.04)
+    bool noThrottle = false;                       // +0x4e8 (surface 8)
     bool warmUp = false;                           // +0x520: run warmUpSteps steps at the next Step
     s32 warmUpSteps = 0x14;                        // +0x524
     VecFx32 bodyCentre = {};                       // +0x534

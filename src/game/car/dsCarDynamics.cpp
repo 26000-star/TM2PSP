@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include "core/dsTime.h"
 #include "gfx/dsModelInfo.h"
 #include "math/dsMath.h"
 #include "track/dsRaceSetup.h"
@@ -156,4 +157,116 @@ void dsCarDynamics::Place(const MtxFx43 &m, bool updateVisual, bool warm)
     probeLength = 0x1800;
     warmUp = warm;
     (void)updateVisual;
+}
+
+// @port ov003:02122b10 done
+void dsCarDynamics::SetInput(const dsCarInput &in)
+{
+    input = in;
+    inputMode = 3;
+}
+
+static inline fx32 Clamp1(fx32 v, fx32 lo)
+{
+    if (v < lo)
+        return lo;
+    if (0xfff < v)
+        return FX32_ONE;
+    return v;
+}
+
+// Steering: steer follows input.steer at 1/SteerOnset per second; steerAccum builds up (5/s) while turning hard at
+// speed with the brake held, and recentres by dt/OversteerCancel otherwise. pitch follows input.pitch the same
+// way. Throttle = accel - 2 brake, approached at dt/AccelOnset (cut to <= 0 on surface 8). Then the velocity is
+// limited to speedLimit and forwardSpeed = velocity . forward.
+// @port ov003:02127af8 done
+void dsCarDynamics::UpdateInputs()
+{
+    fx32 target = input.steer;
+    bool mirrored = target < steer;
+    if (mirrored) {
+        steer = -steer;
+        target = -target;
+        steerAccum = -steerAccum;
+    }
+    bool braking = forwardSpeed > 0 && input.brake > 0;
+    fx32 at = target < 0 ? -target : target;
+    if (at < 0x800 || !braking) {
+        fx32 d = p.OversteerCancel != 0 ? FX_Div(dt, p.OversteerCancel) : 0;
+        if (steerAccum < 1) {
+            steerAccum += d;
+            if (steerAccum > 0)
+                steerAccum = 0;
+        } else {
+            steerAccum -= d;
+            if (steerAccum < 0)
+                steerAccum = 0;
+        }
+    } else {
+        steerAccum += dt * 5;
+        if (steerAccum > FX32_ONE)
+            steerAccum = FX32_ONE;
+    }
+    if (steer < target) {
+        steer += Mul(invSteerOnset, dt);
+        if (target < steer)
+            steer = target;
+    }
+    if (mirrored) {
+        steer = -steer;
+        steerAccum = -steerAccum;
+    }
+    steer = Clamp1(steer, (fx32)0xfffff001);
+
+    fx32 pt = input.pitch;
+    bool pm = pt < unk3a4;
+    if (pm) {
+        unk3a4 = -unk3a4;
+        pt = -pt;
+    }
+    if (unk3a4 < pt) {
+        unk3a4 += Mul(invSteerOnset, dt);
+        if (pt < unk3a4)
+            unk3a4 = pt;
+    }
+    if (pm)
+        unk3a4 = -unk3a4;
+    unk3a4 = Clamp1(unk3a4, (fx32)0xfffff001);
+
+    fx32 tt = Clamp1(input.accel + input.brake * -2, (fx32)0xfffff001);
+    if (tt < 0 && throttle > 0)
+        throttle = 0;
+    fx32 cur = throttle;
+    if (cur != tt) {
+        bool neg = tt < cur;
+        if (neg)
+            throttle = -cur;
+        fx32 lim = neg ? -tt : tt;
+        fx32 d = p.AccelOnset != 0 ? FX_Div(g_dsFrameTime, p.AccelOnset) : 0;
+        throttle += d;
+        if (lim < throttle)
+            throttle = lim;
+        if (neg)
+            throttle = -throttle;
+    }
+    if (noThrottle) {
+        if (forwardSpeed < 0x801)
+            throttle = 0;
+        else if (throttle >= 0)
+            throttle = 0;
+    }
+    fx32 v = dsVec_Mag(&velocity);
+    if (speedLimit < v) {
+        if (velocity.x == 0 && velocity.y == 0 && velocity.z == 0)
+            velocity = {0, 0, FX32_ONE};
+        else
+            dsVec_Normalize(&velocity, &velocity);
+        velocity = {Mul(velocity.x, speedLimit), Mul(velocity.y, speedLimit), Mul(velocity.z, speedLimit)};
+    }
+    VecFx32 fwd = {matrix.m[2][0], matrix.m[2][1], matrix.m[2][2]};
+    forwardSpeed = (fx32)(((s64)velocity.z * fwd.z + (s64)velocity.x * fwd.x + (s64)fwd.y * velocity.y + 0x800) >> 12);
+    fx32 sa = steerAccum < 0 ? -steerAccum : steerAccum;
+    skid = unk400 <= sa ? sa : unk400;
+    if (0xfff < skid)
+        skid = FX32_ONE;
 }

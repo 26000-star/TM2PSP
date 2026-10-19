@@ -165,3 +165,4 @@ ov003:02126d10 dsCarDynamics_UpdateVisual
 ov003:02126628 dsCarDynamics_ReadModelBox
 ov003:020fd914 dsCarModel_ctor
 ov003:020fbf20 dsCarModel_Reset
+ov003:02122b10 dsCarDynamics_SetInput
