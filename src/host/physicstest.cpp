@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "car/dsCarDynamics.h"
 #include "car/dsCarEngine.h"
 #include "car/dsCarParams.h"
 #include "collision/dsCollisionWorld.h"
@@ -115,6 +116,20 @@ static int EngineDump()
             for (fx32 r = 0; r <= e.rpmMax + 0x100000; r += 0x80000)
                 printf(" %d", e.Torque(r));
             printf("\n");
+        }
+        dsCarModelGeometry geo;
+        if (geo.Load(kv.first, 0, p)) {
+            dsCarDynamics dyn(kv.first, &geo);
+            dyn.LoadParams(p);
+            printf("car %s half=%d,%d,%d centre=%d,%d,%d radius=%d,%d raise=%d max=%d\n", kv.first.c_str(), dyn.halfSize.x,
+                   dyn.halfSize.y, dyn.halfSize.z, dyn.bodyCentre.x, dyn.bodyCentre.y, dyn.bodyCentre.z,
+                   dyn.invFrontRadius, dyn.invRearRadius, dyn.matrix.m[3][1], dyn.maxSpeed);
+            for (int i = 0; i < 4; i++) {
+                const dsCarWheel *w = dyn.wheels[i];
+                printf("wheel %s %d pos=%d,%d,%d probe=%d,%d,%d travel=%d radius=%d range=%d,%d\n", kv.first.c_str(), i,
+                       w->pos.x, w->pos.y, w->pos.z, w->probe.x, w->probe.y, w->probe.z, w->travel, w->radius,
+                       w->travelMin, w->travelMax);
+            }
         }
         for (int skin = 0; skin < 10; skin++) {
             char name[64];

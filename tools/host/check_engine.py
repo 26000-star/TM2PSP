@@ -146,6 +146,35 @@ def main():
             if got != want:
                 err("%s torque gear %d differs" % (car, gear))
             checked += 1
+        elif w[0] == "car":
+            c = cars[car]
+            size, _ = box(car, 0)
+            if car == "sno":
+                size = [size[0] - 0x333, size[1], size[2] - 0x666]
+            kv = dict(x.split("=") for x in w[2:])
+            half = "%d,%d,%d" % tuple(mul(v, 0x800) for v in size)
+            centre = "0,%d,%d" % (int(size[1] / 2), 0x333 if car == "sno" else 0)
+            radius = "%d,%d" % (div(4096, int(c["FrontWheel"][2])), div(4096, int(c["RearWheel"][2])))
+            want = {"half": half, "centre": centre, "radius": radius, "raise": "163", "max": str(mul(e[1], e[3][-1][0]))}
+            for k, v in want.items():
+                if kv.get(k) != v:
+                    err("%s car %s %s, expected %s" % (car, k, kv.get(k), v))
+            checked += 1
+        elif w[0] == "wheel":
+            c = cars[car]
+            i = int(w[2])
+            kv = dict(x.split("=") for x in w[3:])
+            src = c["FrontWheel"] if i < 2 else c["RearWheel"]
+            x, y, z = (int(src[k]) for k in (1, 2, 3))
+            if i & 1:
+                x = -x
+            pos = "%d,%d,%d" % (x, y - 163, z)
+            want = {"pos": pos, "probe": pos, "travel": str(int(c["WheelTravelPhys"])), "radius": str(y),
+                    "range": "%d,%d" % (int(c["WheelTravelBot"]), int(c["WheelTravelTop"]))}
+            for k, v in want.items():
+                if kv.get(k) != v:
+                    err("%s wheel %d %s %s, expected %s" % (car, i, k, kv.get(k), v))
+            checked += 1
         elif w[0] == "box":
             b = box(car, int(w[2]))
             got = ([int(v) for v in w[3].split(",")], [int(v) for v in w[4].split(",")])
