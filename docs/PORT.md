@@ -302,13 +302,36 @@ and then reverses. Two runs give identical output.
   sparks and debug lines, the owner vehicle's booster flag. Boosters (material 7) need the race grid lookup
   (main 0x0208d404): the port takes it as a callback (`pieceRotationAt`), not wired in the test driver yet.
 
+## Slice 4a: host race window (first pass)
+
+`tm_race --root extract/files [--track easy/0]` opens an SDL2 window (768 x 576) and runs the ported code at 30 Hz:
+track scene and piece placement, collision world, car parameters, engine and the full car step, driven from the
+keyboard (arrows, R = restart). `--frames N --shot out.bmp [--auto]` renders N steps off-screen and saves the
+last frame, which is how the renderer was checked (see `docs/host_race.png`: easy/0 after 4 s at full throttle).
+
+- **SDL2** 2.30.12 is built as a static library from the official source release, whose GPG signature was checked
+  against Sam Lantinga's key (fingerprint 1528 635D 8053 A57F 77D1 E086 30A5 9377 A776 3BE6), into
+  `build/ext/sdl2` (not in git). The MinGW development archive has no signature, hence the source build. CMake
+  skips `tm_race` when SDL2 is missing.
+- **G3D stand-in** (`src/shim/host/g3d_gl.*`): MDL0 render commands (node, material, shape, scale up/down) and GX
+  display lists replayed as OpenGL 1.x primitives; all DS texture formats decoded (tex4x4 included); polygon
+  attributes give culling (DS front faces are counter-clockwise in GL terms) and alpha. Track pieces take their
+  materials from `material.bin` + `texturebatch.n` (format in ASSETS.md).
+- Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread at the origin, the shadow
+  quads and a large "cone" shape that the game positions or hides itself in the visual update (0x02126d10).
+- Not ported yet (stand-ins in tm_race): main loop/race manager (`main()` 0x02003000), cameras (`config/cameras`,
+  a fixed chase view here), DS lighting/fog/toon (flat GL colours), the Coast terrain builder (cliffs and beaches
+  are missing, the sea is a flat quad at 2.5), wheels, HUD, checkpoints/laps, sound.
+
 ## Next slices
 
 1. **Cameras** (`config/cameras`), the race grid lookup for boosters (main 0x0208d404 / 0x0208cb80), car/car
    contacts (the +0x248 sums), and a dynamic trace of `dsCarDynamics_Step` in melonDS to compare the port bit for
    bit (the drop test only checks behaviour).
 2. Terrain builder (ov003 0x02100b2c and callees) so Coast cliffs and beaches exist for collision and display.
-3. Renderer: Firebrand's BMD0/G3 path onto an OpenGL host back-end (TMPM from phase 2 for the PSP); environment
-   assets (main 0x02099e6c: `texturebatch.n`, `material.bin`, sky, sea).
-4. Host executable with SDL2 (window, pad), main loop from `main()` (0x02003000).
+3. Renderer, faithful pass: Firebrand's model drawing (dsModel, visual update 0x02126d10 for wheels/shadow),
+   DS lighting from `config/tracks` (the eight colours), sky and sea from the environment loader (main
+   0x02099e6c), then the same G3 path on the PSP (TMPM from phase 2).
+4. Main loop from `main()` (0x02003000) and the race manager (countdown, checkpoints, laps, finish) replacing the
+   tm_race stand-ins; HUD.
 5. Dynamic coverage trace in melonDS to rank the 4,200 race functions.

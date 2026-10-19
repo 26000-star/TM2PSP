@@ -46,6 +46,25 @@ Written by `tools/assets/psp_model.py`, drawn by `psp/viewer/main.c`. Little end
 
 Viewer check: `bash tools/psp_build.sh psp/viewer`, then `powershell -File tools/ppsspp_shot.ps1 build/psp/viewer/EBOOT.PBP TM2PSPVIEW build/preview/x.png "<model.tmpm>=model.tmpm"`. The viewer writes `shot.bmp` after 45 frames. **Car `Cars/Sta/0/lod0.n` renders textured and lit in PPSSPP.**
 
+## Track batch materials (`material.bin`)
+
+Firebrand's track piece models set bit 31 of their MDL0 materials offset; the block is then a count byte and one
+byte per material, and the material commands of the render bytecode carry these bytes. They index
+`Graphics/Tracks/<env>/material.bin`, which the model loader reads next to `texturebatch.n` (main 0x0205600c flags
+a name containing "texturebatch", 0x0205513c loads the file):
+
+```
+u32 count                      // 91 on Coast
+u32 names_offset               // from +8
+count x { u16 tag, u16 size (0x2c), NNSG3dResMatData: u32 diffAmb, specEmi, polygonAttr, polygonAttrMask,
+          texImageParam (repeat/flip bits only), texImageParamMask, u16 texPlttBase, flag, origWidth,
+          origHeight, fx32 magW, magH }
+count x { char material[16], texture[16], palette[16] }   // names in texturebatch.n's TEX0
+```
+
+The texture and palette are found by name in the environment's `texturebatch.n` (84 textures on Coast). Indexing
+the TEX0 dictionary directly with the batch byte gives wrong textures (turbo signs on every road).
+
 ## Track piece collision `.h`
 
 Confirmed from the loader (main 0x02065c04, `dsCollisionMesh::Load`) and checked on all 964 files (every byte accounted for):

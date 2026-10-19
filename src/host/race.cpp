@@ -188,6 +188,9 @@ bool Race::Load(const char *trackName)
     Restart();
 
     batch = LoadModel("Tracks/coa/texturebatch");
+    std::vector<u8> mb;
+    if (batch && ReadFile("graphics/Tracks/coa/material.bin", &mb) && batch->LoadMaterialBin(mb))
+        batch->Upload();
     std::map<std::string, G3Model *> cache;
     for (const dsTrackPiece *p : track.pieces) {
         auto it = cache.find(p->modelPath);
@@ -196,9 +199,9 @@ bool Race::Load(const char *trackName)
         if (it->second)
             pieces.push_back({it->second, p});
     }
-    carModel = LoadModel("Cars/coa/0/lod0");
-    if (!carModel)
-        carModel = LoadModel("Cars/coa/0/lod1");
+    // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
+    // places itself in the visual update 0x02126d10, not ported yet).
+    carModel = LoadModel("Cars/coa/0/lod1");
     printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
            batch ? "ok" : "missing", carModel ? "ok" : "missing");
     return true;
@@ -235,7 +238,9 @@ void Race::Draw(int w, int h)
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_ALPHA_TEST);
-    glAlphaFunc(GL_GREATER, 0.5f);
+    glAlphaFunc(GL_GREATER, 0.02f);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     // Sea at the Coast sea level (2.5).
     glDisable(GL_TEXTURE_2D);

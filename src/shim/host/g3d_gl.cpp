@@ -250,7 +250,7 @@ bool G3Model::Load(const std::vector<u8> &d)
     }
     if (!mdl)
         return false;
-    G3TexSet ts;
+    G3TexSet &ts = texSet;
     if (tex0)
         ts.Parse(d, (u32)tex0);
     Dict models = ReadDict(d, mdl + 8);
@@ -364,6 +364,44 @@ bool G3Model::Load(const std::vector<u8> &d)
     return true;
 }
 
+bool G3Model::LoadMaterialBin(const std::vector<u8> &d)
+{
+    u32 count = R32(d, 0), names = 8 + R32(d, 4);
+    if (count == 0 || names + count * 48 > d.size())
+        return false;
+    std::vector<G3Texture> tex;
+    std::vector<Material> mats;
+    size_t p = 8;
+    for (u32 i = 0; i < count; i++) {
+        Material m;
+        m.difAmb = R32(d, p + 4);
+        m.polyAttr = R32(d, p + 12);
+        m.texParam = R32(d, p + 20);
+        m.w = R16(d, p + 0x24);
+        m.h = R16(d, p + 0x26);
+        p += R16(d, p + 2);
+        auto name = [&](int k) {
+            char n[17] = {};
+            memcpy(n, &d[names + i * 48 + k * 16], 16);
+            return std::string(n);
+        };
+        int ti = texSet.FindTex(name(1)), pi = texSet.FindPal(name(2));
+        if (ti >= 0) {
+            G3Texture t = texSet.Decode(ti, pi);
+            t.repeatS = (m.texParam >> 16) & 1;
+            t.repeatT = (m.texParam >> 17) & 1;
+            t.flipS = (m.texParam >> 18) & 1;
+            t.flipT = (m.texParam >> 19) & 1;
+            m.texture = (int)tex.size();
+            tex.push_back(t);
+        }
+        mats.push_back(m);
+    }
+    textures = tex;
+    materials = mats;
+    return true;
+}
+
 void G3Model::Upload()
 {
     for (G3Texture &t : textures) {
@@ -373,9 +411,18 @@ void G3Model::Upload()
         glBindTexture(GL_TEXTURE_2D, t.gl);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+                        !t.repeatS ? GL_CLAMP_TO_EDGE : t.flipS ? GL_MIRRORED_REPEAT : GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
+                        !t.repeatT ? GL_CLAMP_TO_EDGE : t.flipT ? GL_MIRRORED_REPEAT : GL_REPEAT);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t.rgba.data());
     }
 }
+
+static float curAlpha = 1;
+#ifndef G3_FRONT_FACE
+#define G3_FRONT_FACE GL_CCW
+#endif
 
 static const int GPU_PARAMS[0x80] = {
     /*00*/ 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -419,7 +466,7 @@ void G3Model::DrawShape(const std::vector<u8> &dl, const G3Texture *t) const
                 inPrim = false;
                 break;
             case 0x20:
-                glColor3f((p0 & 31) / 31.0f, ((p0 >> 5) & 31) / 31.0f, ((p0 >> 10) & 31) / 31.0f);
+                glColor4f((p0 & 31) / 31.0f, ((p0 >> 5) & 31) / 31.0f, ((p0 >> 10) & 31) / 31.0f, curAlpha);
                 break;
             case 0x21: {
                 // Normal: a fixed light from above-front, ambient 0.55 (stand-in for the DS lighting).
@@ -477,10 +524,12 @@ void G3Model::DrawShape(const std::vector<u8> &dl, const G3Texture *t) const
 
 void G3Model::Draw(const G3Model *batch) const
 {
+    glFrontFace(G3_FRONT_FACE);
     glPushMatrix();
     float scale = 1;
     const G3Texture *tex = nullptr;
     u32 dif = 0x7fff;
+    float alpha = 1;
     for (const Op &o : ops) {
         switch (o.kind) {
         case 0:
@@ -494,14 +543,25 @@ void G3Model::Draw(const G3Model *batch) const
         case 1:
             tex = nullptr;
             dif = 0x7fff;
-            if (batchMaterials) {
-                if (batch && o.a < (int)batch->textures.size())
-                    tex = &batch->textures[o.a];
-            } else if (o.a < (int)materials.size()) {
-                const Material &m = materials[o.a];
-                dif = m.difAmb & 0x7fff;
-                if (m.texture >= 0)
-                    tex = &textures[m.texture];
+            {
+                const G3Model *src = batchMaterials ? batch : this;
+                if (src && o.a < (int)src->materials.size()) {
+                    const Material &m = src->materials[o.a];
+                    dif = m.difAmb & 0x7fff;
+                    if (m.texture >= 0)
+                        tex = &src->textures[m.texture];
+                    // Polygon alpha 0 is wireframe on the DS; 1..30 translucent.
+                    // POLYGON_ATTR bit 6 = draw back faces, bit 7 = draw front faces.
+                    bool back = (m.polyAttr >> 6) & 1, front = (m.polyAttr >> 7) & 1;
+                    if (back && front) {
+                        glDisable(GL_CULL_FACE);
+                    } else {
+                        glEnable(GL_CULL_FACE);
+                        glCullFace(front ? GL_BACK : back ? GL_FRONT : GL_FRONT_AND_BACK);
+                    }
+                    u32 a = (m.polyAttr >> 16) & 31;
+                    alpha = a == 0 ? 1.0f : a / 31.0f;
+                }
             }
             if (tex && tex->gl) {
                 glEnable(GL_TEXTURE_2D);
@@ -509,7 +569,8 @@ void G3Model::Draw(const G3Model *batch) const
             } else {
                 glDisable(GL_TEXTURE_2D);
             }
-            glColor3f((dif & 31) / 31.0f, ((dif >> 5) & 31) / 31.0f, ((dif >> 10) & 31) / 31.0f);
+            glColor4f((dif & 31) / 31.0f, ((dif >> 5) & 31) / 31.0f, ((dif >> 10) & 31) / 31.0f, alpha);
+            curAlpha = alpha;
             break;
         case 2:
             if (o.a < (int)shapes.size())
@@ -527,4 +588,5 @@ void G3Model::Draw(const G3Model *batch) const
         }
     }
     glPopMatrix();
+    glDisable(GL_CULL_FACE);
 }

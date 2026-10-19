@@ -43,11 +43,17 @@ public:
     // Uses the batch textures for Firebrand batch materials (texturebatch.n of the environment).
     void Draw(const G3Model *batch) const;
     void Upload();                 // creates the GL textures (needs a current context)
+    // Firebrand's Tracks/<env>/material.bin, loaded next to texturebatch.n (main 0x0205513c): u32 count,
+    // u32 offset of the names (from +8), `count` NNS material records (u16 tag, u16 size, then
+    // NNSG3dResMatData), then per material three 16-byte names: material, texture, palette. Piece models'
+    // batch indices select these materials; their textures come from this model's TEX0 by name.
+    bool LoadMaterialBin(const std::vector<u8> &file);
 
     struct Material {
         int texture = -1;          // index in m_textures
         u32 difAmb = 0x7fff7fff, polyAttr = 0x1f00c0;
         int w = 0, h = 0;
+        u32 texParam = 0;          // TEXIMAGE_PARAM bits 16..19: repeat S/T, flip S/T
     };
     struct Node { float m[16]; };
     struct Op { int kind, a; };    // kinds: 0 node, 1 material, 2 draw, 3 scale up, 4 scale down
@@ -58,6 +64,7 @@ public:
     std::vector<Op> ops;
     float upScale = 1, downScale = 1;
     bool batchMaterials = false;
+    G3TexSet texSet;               // TEX0 of this container (kept for material.bin)
 
 private:
     void DrawShape(const std::vector<u8> &dl, const G3Texture *t) const;
