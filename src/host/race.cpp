@@ -280,7 +280,8 @@ int main(int argc, char **argv)
         dsCarInput in;
         in.accel = (k[SDL_SCANCODE_UP] || autoDrive) ? FX32_ONE : 0;
         in.brake = k[SDL_SCANCODE_DOWN] ? FX32_ONE : 0;
-        in.steer = (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0);
+        // The game's steer is positive to the left (seen on a real PSP-3000, same code as here).
+        in.steer = (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0);
         race.Frame(in);
         UpdateTitle(win, *race.progress);
         DrawRace(race, W, H);

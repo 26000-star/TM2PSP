@@ -567,3 +567,15 @@ essayer sur la console, ce que l'automatisation n'a pas le droit de faire) :
   trop lent : sommets 16 bits, textures en VRAM, culling des pièces hors champ ;
 - fidélité (inchangé depuis la phase 3) : HUD du jeu, éclairage DS (`config/tracks`), ciel, roues/ombre, menus,
   son (sceAudio), gestionnaire de caméras ; sur PSP en plus : brouillard et éventuelle profondeur 16 bits à affiner.
+
+### Feedback from the real PSP-3000 (2026-10-19, user test)
+
+- **Steering was inverted** (d-pad and stick): the game's `steer` is positive to the **left**; both drivers chose
+  +1 = right. Fixed in `race_psp.cpp` and the host `race.cpp` (same mapping, same game code).
+- **The track vanished behind the car while driving**: the GE drops a whole triangle when a vertex projects out of
+  its guard band, which large track triangles near the camera do; PPSSPP does not emulate this, so the screenshot
+  checks could not see it. The sceGu back-end now splits triangles along their longest edge until every edge is at
+  most 3 world units (`G3_GU_MAX_EDGE`): vertex arrays 0.26 -> 1.5 MB, heap 4.2 MB, PPSSPP image and car/camera
+  state unchanged. To confirm on the console; if pieces still drop, lower the limit or clip near triangles on the
+  CPU.
+- The package now holds only `vfs.zip`, `vfs.bin` and `vfs.dat` (27.5 MB): the race reads nothing else.

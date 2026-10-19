@@ -310,7 +310,7 @@ int main(int argc, char **argv)
             steer = FX32_ONE;
         if (b & PSP_CTRL_LEFT)
             steer = -FX32_ONE;
-        in.steer = steer;
+        in.steer = -steer; // the game's steer is positive to the left (seen on a real PSP-3000)
 
         u64 a = Us();
         race.Frame(in);

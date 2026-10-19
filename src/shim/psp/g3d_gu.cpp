@@ -44,6 +44,9 @@ struct GuModelData {
 
 size_t g_textureBytes, g_meshBytes;
 
+// Longest triangle edge kept by the conversion, in world units (see GuSink::Emit).
+const float G3_GU_MAX_EDGE = 3.0f;
+
 // Swizzles a texture of `bw` bytes per row and h rows (bw multiple of 16, h multiple of 8) into dst.
 void Swizzle(u8 *dst, const u8 *src, int bw, int h)
 {
@@ -130,11 +133,7 @@ struct GuSink : G3ShapeSink {
     void End() override
     {
         size_t n = prim.size();
-        auto tri = [&](size_t a, size_t b, size_t c) {
-            out.push_back(prim[a]);
-            out.push_back(prim[b]);
-            out.push_back(prim[c]);
-        };
+        auto tri = [&](size_t a, size_t b, size_t c) { Emit(prim[a], prim[b], prim[c], 0); };
         switch (mode) {
         case 0:
             for (size_t i = 0; i + 2 < n; i += 3)
@@ -162,6 +161,53 @@ struct GuSink : G3ShapeSink {
             break;
         }
         prim.clear();
+    }
+    // The GE drops a whole triangle when a vertex projects outside its guard band (about +-2048 pixels around the
+    // screen centre), which large track triangles near the camera do: the road behind the car vanished on a real
+    // PSP (PPSSPP does not reproduce it). Triangles are split along their longest edge until every edge is at most
+    // maxEdge model units.
+    float maxEdge = 1e30f;
+    static GuVertex Mid(const GuVertex &a, const GuVertex &b)
+    {
+        GuVertex m;
+        m.u = (a.u + b.u) * 0.5f;
+        m.v = (a.v + b.v) * 0.5f;
+        m.x = (a.x + b.x) * 0.5f;
+        m.y = (a.y + b.y) * 0.5f;
+        m.z = (a.z + b.z) * 0.5f;
+        u32 c = 0;
+        for (int k = 0; k < 32; k += 8)
+            c |= ((((a.color >> k) & 255) + ((b.color >> k) & 255) + 1) / 2) << k;
+        m.color = c;
+        return m;
+    }
+    static float Len2(const GuVertex &a, const GuVertex &b)
+    {
+        float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        return dx * dx + dy * dy + dz * dz;
+    }
+    void Emit(const GuVertex &a, const GuVertex &b, const GuVertex &c, int depth)
+    {
+        float ab = Len2(a, b), bc = Len2(b, c), ca = Len2(c, a), lim = maxEdge * maxEdge;
+        if (depth < 10 && (ab > lim || bc > lim || ca > lim)) {
+            if (ab >= bc && ab >= ca) {
+                GuVertex m = Mid(a, b);
+                Emit(a, m, c, depth + 1);
+                Emit(m, b, c, depth + 1);
+            } else if (bc >= ca) {
+                GuVertex m = Mid(b, c);
+                Emit(a, b, m, depth + 1);
+                Emit(a, m, c, depth + 1);
+            } else {
+                GuVertex m = Mid(c, a);
+                Emit(a, b, m, depth + 1);
+                Emit(m, b, c, depth + 1);
+            }
+            return;
+        }
+        out.push_back(a);
+        out.push_back(b);
+        out.push_back(c);
     }
     void Color(u32 c) override
     {
@@ -273,6 +319,7 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             auto it = data->meshes.find(key);
             if (it == data->meshes.end()) {
                 GuSink sink(tex, tex ? (const GuTex *)tex->gu : nullptr, dif, alpha);
+                sink.maxEdge = G3_GU_MAX_EDGE / scale;
                 G3DecodeShape(shapes[o.a], sink);
                 GuMesh m;
                 m.count = (int)sink.out.size();
