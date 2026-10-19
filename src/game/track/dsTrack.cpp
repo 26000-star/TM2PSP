@@ -1,11 +1,13 @@
 #include "dsTrack.h"
 
+#include <algorithm>
 #include <utility>
 
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "collision/dsCollisionMesh.h"
 #include "collision/dsCollisionWorld.h"
 #include "math/dsMath.h"
 #include "script/dsLua.h"
@@ -240,7 +242,13 @@ int dsTrack::PieceRotationAt(const VecFx32 &p) const
     fx32 cw = setup->cellWidth << 12, ch = setup->cellHeight << 12;
     if (cw == 0 || ch == 0 || p.x < 0 || p.y < 0 || p.z < 0)
         return -1;
-    s32 c[3] = {FX_Div(p.x, cw) >> 12, FX_Div(p.y, ch) >> 12, FX_Div(p.z, cw) >> 12};
+    // main 0x0208cb80: x and z are shifted by half a cell first (grid +0x40c = (cellWidth >> 1) << 12, set by the
+    // grid constructor main 0x0208da98), y is not.
+    fx32 half = (setup->cellWidth >> 1) << 12;
+    s32 c[3] = {FX_Div(p.x + half, cw) >> 12, FX_Div(p.y, ch) >> 12, FX_Div(p.z + half, cw) >> 12};
+    // Footprints can overlap (a loop's 2 x 8 cells over a booster beside it), which the game's per-cell grid bytes
+    // settle; without them, a piece with booster surfaces (material 7) wins, then the first one placed.
+    int found = -1;
     for (const dsTrackPiece *pc : pieces) {
         if (!pc->info)
             continue;
@@ -248,10 +256,15 @@ int dsTrack::PieceRotationAt(const VecFx32 &p) const
         if (pc->rotation & 1)
             std::swap(w, d);
         if (c[0] <= pc->cell[0] && pc->cell[0] - w < c[0] && pc->cell[2] <= c[2] && c[2] < pc->cell[2] + d &&
-            pc->cell[1] <= c[1] && c[1] < pc->cell[1] + h)
-            return pc->rotation;
+            pc->cell[1] <= c[1] && c[1] < pc->cell[1] + h) {
+            const dsCollisionMesh *m = pc->collision ? pc->collision->mesh.get() : nullptr;
+            if (m && std::find(m->materials.begin(), m->materials.end(), 7) != m->materials.end())
+                return pc->rotation;
+            if (found < 0)
+                found = pc->rotation;
+        }
     }
-    return -1;
+    return found;
 }
 
 // @port main:0208d3c4 partial (footprint walk instead of the grid bytes, see dsTrack.h)
