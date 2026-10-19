@@ -692,3 +692,43 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
   shadow volume of the geometry engine): not reproduced (it needs a stencil pass on both back-ends).
 - `lod0` holds the same wheels at fixed places plus light cones and a flat shadow: it is the close-up model of the
   shop / replays, not used here.
+
+### Not done in this run: HUD, sound, shadow, sea backdrop (findings for the next one)
+
+- **HUD.** The race HUD object (`*0x02137830`, update ov003 0x02102e9c) is a composite of about ten sub-objects
+  (clock at +0x130: update ov003 0x02105408 over 8 sprite objects with blinking; others at +0x04, +0x2c, +0x3c,
+  +0x58, +0x1f4, +0x32c, +0x360). Its sprites are `Graphics/2dSprites/common/HUD/Cell/*` (SplitTimeSprites,
+  TimerIcon, HUD_Small, UpDownSprites, AB, Coppers; palette HUD_UI_palette) and the fonts
+  `.../Fonts/Cell/Font{20..40}_White`. `tools/assets/nitro2d.py` renders these cells with scrambled tiles (its
+  1D mapping for `mapping` 16 / 0x300010 is wrong), so the next step is to fix the cell renderer, then port the
+  sub-objects' set-up (sprite positions) and an OAM stand-in on both back-ends.
+- **Sound:** not started (`audio/sound_data.sdat`; sceAudio on the PSP).
+- **Shadow:** `Cars/<env>/shadow.n` is a DS shadow volume (stencil pass needed).
+- **Sea backdrop:** `Misc/CoastSea/CoastSea` (4 vertices, texture-animated by ov003 0x0213079c, created by ov003
+  0x0211de20) is a tilted quad whose placement is not understood yet; the port keeps its flat sea.
+
+## Bilan de la phase 5, run 1 (rapport, 2026-10-19)
+
+**Priorités 1 et 2 terminées, priorité 3 en partie.** Tout est vérifié dans PPSSPP et sur l'hôte ; la vitesse et
+l'aspect sur la vraie PSP-3000 restent à confirmer par l'utilisateur.
+
+1. **Menu des pistes** (hôte et PSP, `RaceApp`) : 26 pistes Coast avec leur meilleur temps, pause (START),
+   écran d'arrivée, piste suivante, sauvegarde `save.txt` à côté de l'EBOOT. Une fuite de 668 Ko de textures par
+   chargement a été trouvée et corrigée ; 32 rechargements dans PPSSPP gardent tas, textures, sommets et fichiers
+   ouverts constants (`tools/psp/reload_test.ps1`).
+2. **Sécurité de performance** : culling des pièces hors champ (images identiques au pixel près, 50 % des pièces
+   dessinées en moyenne), textures palettisées sans perte et en VRAM (1,0 Mo -> 580 Ko), sommets 16 bits exacts
+   (2,4 -> 1,6 Mo), conversion au chargement, journal `frametimes.txt` (fichier `perf.txt`). PPSSPP, hard/0 :
+   construction de liste 3,1 -> 1,9 ms par image avant l'éclairage, 3,3 ms avec ciel, éclairage et roues ; mise à
+   jour du jeu 4,3 ms ; tas 3,2 Mo. **Le temps GE réel n'est mesurable que sur la console.**
+3. **Fidélité** : l'éclairage du jeu retrouvé dans le code (lumières, jeux de couleurs de `config/tracks`, règles
+   des matériaux, table de brillance) appliqué à l'identique sur les deux back-ends — les pièces et la voiture
+   étaient dessinées à plat ; brouillard (lecture du W-buffer à confirmer) ; ciel de l'heure de la piste ; roues
+   de la voiture. Restent : HUD du jeu, son, ombre (volume d'ombre), fond de mer animé.
+
+Vérifications à chaque étape : hôte et PSP sans avertissement, 114 vérifications hôte à 0 erreur, 114 dumps PSP
+identiques à l'hôte, état voiture/caméra PSP = hôte (easy/0 150 images, hard/0 600 images).
+
+**Prochaine étape = test console par l'utilisateur** (copier `build\psp\package\PSP`) : menu et records, vitesse
+(touche R ou `perf.txt` -> `frametimes.txt`), aspect (ciel, ombrage, roues, pas de triangles manquants). Selon les
+temps mesurés : optimisations GE supplémentaires ou suite de la fidélité (HUD, son).

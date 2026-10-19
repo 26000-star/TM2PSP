@@ -197,7 +197,7 @@ python -P tools/analysis/port_status.py --race-only
   114 host checks' producers in PPSSPP; the 2.1 MB of dumps are identical byte for byte to the host's and the host
   checkers find 0 errors in them (`tools/psp/run_checks_psp.ps1`).
 - **The Coast race runs on the PSP** (`build/psp/tm_race/EBOOT.PBP`, sceGu 480 x 272, sceCtrl: X accelerate,
-  square brake, d-pad/analog steer, triangle checkpoint, start restart, select camera). In PPSSPP, after 150 frames
+  square brake, d-pad/analog steer, triangle checkpoint, start pause menu, select camera). In PPSSPP, after 150 frames
   the car and camera are identical to the host's (`tools/psp/race_shot.ps1`).
   ![tm_race on the PSP (PPSSPP), coa/easy/0](docs/psp_race.png)
 
@@ -219,3 +219,25 @@ powershell -ExecutionPolicy Bypass -File tools/psp/package.ps1
 
 The last one fills `build/psp/package/PSP/GAME/TM2PSP` (EBOOT + the game files from your ROM): copy its `PSP`
 folder to the root of a memory stick (custom firmware needed). Real-hardware speed is not verified yet.
+
+## Phase 5: polish on the real PSP and fidelity (in progress)
+
+- **Track menu** in front of the race (both drivers, `src/app/race_app.*`): the 26 Coast tracks with their best
+  time, pause and result menus (continue, restart, next track, track menu), best times in `save.txt` next to the
+  EBOOT. Track reloads are leak-free (`tools/psp/reload_test.ps1`: 32 loads in PPSSPP, constant heap).
+- **Performance safety for the real PSP:** pieces outside the view frustum are skipped (pixel-identical images,
+  `tools/host/check_culling.py`), textures are paletted (T4/T8, lossless) and live in VRAM, vertices are 16-bit
+  (exact DS positions), meshes are converted at load; an empty `perf.txt` next to the EBOOT logs frame times to
+  `frametimes.txt`. Console speed still has to be measured on the PSP-3000 (R overlay or the log).
+- **Fidelity:** the DS lighting found in the code (lights, colour sets from `config/tracks`, material rules,
+  shininess table) in common code for both back-ends, the fog, the sky dome of the track's time of day, and the car
+  wheels from the game's wheel models and matrices. Still to do: the game's HUD (sprites), the shadow volume, the
+  animated sea backdrop and the sound.
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/psp/reload_test.ps1
+```
+
+```bash
+python -P tools/host/check_culling.py
+```
