@@ -261,6 +261,14 @@ unluac decompilation of `vehicles.luac` and reads the boxes with the phase-2 BMD
   1.97 x 1.18 x 4.45 m), centred on (0, H/2, 0); the snow car's box is shortened.
 - The frame time is a global (*0x020d6a78, .bss) written by the main loop; host drivers set it (1/30 s).
 
+### Slice 3c (in progress): car dynamics
+
+`src/game/car/dsCarDynamics.*` holds the known layout of the 0x554-byte simulation object (it starts with its own
+copy of `dsCarParams`), its construction (sea level 2.5 on Coast, speed limit 180.6), wheel and engine setup, reset,
+placement and the input smoothing (0x02127af8: steering at 1/SteerOnset, oversteer build-up/cancel, throttle =
+accel - 2·brake approached at dt/AccelOnset). The step itself (0x021222fc) is next: collisions (0x02124fa0),
+forces (0x02127f1c), integration (0x02129098), grip (0x02129f04), drive/brakes (0x0212a9c0), surfaces (0x02122b54).
+
 ## Next slices
 
 1. **Car physics update** (ov003 `dsCarDynamics_Step` 0x021222fc and its 80 callees, 0x021220a0..0x0212bed0 and
