@@ -1,0 +1,68 @@
+# Names recovered in phase 3, race progress slice (triggers, checkpoints, laps, finish, respawn, race clock).
+# Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- dsRace (*0x02137854) ----
+ov003:02113048 dsRace_Update             # respawn/restart buttons, car steps, piece under the car, triggers, HUD
+ov003:02112360 dsRace_UpdateCurrentPiece # +0x60: grid piece at the car's cell (rounded), above/below, 7 units ahead
+ov003:02112f50 dsRace_OnFinish           # -> mode vtable +0x24
+ov003:02112f8c dsRace_OnCheckpoint       # (piece index) -> mode vtable +0x28 (index, piece +0x28 order)
+ov003:02111280 dsRace_CreateFinishTriggers
+ov003:021114e4 dsRace_CreateCheckpoints  # "cp%d" triggers, +0x134 count, start piece +0x5c
+ov003:0211302c dsRace_LocalPlayerIndex
+ov003:021222dc dsRaceFinishListener_OnEnter
+
+# ---- race game mode (vtable 0x02136828) ----
+ov003:02115fd8 dsRaceMode_ctor
+ov003:02115af4 dsRaceMode_Reset          # vtable +0x20 (full)
+ov003:02115704 dsRaceMode_OnFinish       # vtable +0x24
+ov003:0211527c dsRaceMode_OnCheckpoint   # vtable +0x28: respawn point, checkpoints passed +0x44
+ov003:02114a6c dsRaceMode_SetStartPoint
+ov003:021146a4 dsRaceMode_Update         # vtable +0x10
+ov003:02114930 dsRaceMode_OnMessage      # vtable +0x0c
+ov003:02114ee4 dsRaceMode_UpdateCountdown
+ov003:02115940 dsRaceMode_UpdateSinking
+
+# ---- triggers ----
+ov003:0212f4a4 dsTrigger_ctor
+ov003:0212f400 dsTrigger_Reset
+ov003:02130690 dsTriggerGate_ctor
+ov003:02130358 dsTriggerGate_Set
+ov003:021304dc dsTriggerGate_Test
+ov003:02130620 dsTriggerGate_ResetSide
+ov003:02113f50 dsFinishTrigger_Update
+ov003:02113f1c dsFinishTrigger_ResetPlayer
+ov003:02114168 dsCheckpointTrigger_Update
+ov003:02114134 dsCheckpointTrigger_ResetPlayer
+ov003:0213018c dsCheckpointListener_OnEnter
+ov003:021301c0 dsCheckpointListener_ctor
+ov003:02121738 dsTriggerList_Update
+ov003:02121ac8 dsTriggerList_ResetPlayer
+ov003:02121b44 dsTriggerList_FindByName
+ov003:02121c18 dsTriggerList_Add
+ov003:021213f8 dsTriggerList_Clear
+
+# ---- players, cars, placement ----
+ov003:0210fe40 dsPlayerList_Local
+ov003:0210fe50 dsPlayerList_Update
+ov003:0210e044 dsPlayer_Velocity
+ov003:0210e058 dsPlayer_Matrix
+ov003:0210e124 dsPlayer_ResetRace
+ov003:0210f3b4 dsHumanPlayer_Reset
+ov003:0210ed9c dsHumanPlayer_Update
+ov003:0210f530 dsHumanPlayer_Start
+ov003:0212bd68 dsCarWorld_Step           # one dsCarDynamics_Step per active car; called once per 1/60 s tick
+ov003:0211c184 dsRespawn_SetPlacement    # ground probe + axis-snapped direction -> matrix (*0x027e0e58 +0xac)
+ov003:0211e660 dsTrackPiece_IsCheckpoint
+ov003:0211e674 dsTrackPiece_IsMultilap
+ov003:0211e688 dsTrackPiece_IsFinish
+ov003:0211e69c dsTrackPiece_IsStart
+ov003:02104620 dsHud_ShowCheckpointsMissed
+ov003:02104670 dsHud_ShowFinish
+ov003:02105408 dsHudClock_Update
+0208cd28 dsRaceGrid_CollectFinishPieces
+0208cdcc dsRaceGrid_StartPiece
+0208d38c dsRaceGrid_PieceIndex
+020ad21c dsTimer_Update
+02057db4 dsMtx43_InverseScaled
+020b32a0 __sinit_dsFrameTime             # *0x020d6a78 = FX_Inv(60.0)
+01ffa9d4 dsVec_Distance

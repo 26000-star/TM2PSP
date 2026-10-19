@@ -128,3 +128,60 @@ void dsMtx43_FromAxes(MtxFx43 *m, const VecFx32 *pos, const VecFx32 *fwd, const 
     m->m[2][0] = z.x; m->m[2][1] = z.y; m->m[2][2] = z.z;
     m->m[3][0] = pos->x; m->m[3][1] = pos->y; m->m[3][2] = pos->z;
 }
+
+// |a - b| with the square-root unit: (sqrt(4 d^2) + 1) >> 1, the differences on 32 bits.
+// @port itcm:01ffa9d4 done
+fx32 dsVec_Distance(const VecFx32 *a, const VecFx32 *b)
+{
+    VecFx32 d = {(fx32)((u32)a->x - (u32)b->x), (fx32)((u32)a->y - (u32)b->y), (fx32)((u32)a->z - (u32)b->z)};
+    return dsVec_Mag(&d);
+}
+
+// The rotation rows are first divided by the largest row length s (FX_Inv of FX_Sqrt of the largest squared
+// length), the adjugate of that matrix is divided by its determinant and multiplied by 1/s, and the translation
+// is -t * inverse. Every product is rounded (+0x800 >> 12); both thresholds (s and |det| > 3) give the identity.
+// @port main:02057db4 done
+bool dsMtx43_InverseScaled(MtxFx43 *mtx)
+{
+    fx32 *m = &mtx->m[0][0];
+    auto mul = [](fx32 a, fx32 b) { return (fx32)(((s64)a * b + 0x800) >> 12); };
+    auto len2 = [&](int r) {
+        return (fx32)(((s64)m[r + 2] * m[r + 2] + (s64)m[r] * m[r] + (s64)m[r + 1] * m[r + 1] + 0x800) >> 12);
+    };
+    fx32 l = len2(0);
+    if (len2(3) > l)
+        l = len2(3);
+    if (len2(6) > l)
+        l = len2(6);
+    fx32 s = FX_Sqrt(l);
+    if (s <= 3) {
+        dsMtx43_Identity(mtx);
+        return false;
+    }
+    fx32 inv = FX_Inv(s);
+    for (int i = 0; i < 9; i++)
+        m[i] = mul(m[i], inv);
+    fx32 c[12];
+    c[0] = mul(m[4], m[8]) - mul(m[7], m[5]);
+    c[3] = mul(m[5], m[6]) - mul(m[3], m[8]);
+    c[6] = mul(m[3], m[7]) - mul(m[6], m[4]);
+    fx32 det = mul(m[2], c[6]) + mul(m[0], c[0]) + mul(m[1], c[3]);
+    if ((det < 0 ? -det : det) <= 3) {
+        dsMtx43_Identity(mtx);
+        return false;
+    }
+    c[1] = mul(m[7], m[2]) - mul(m[1], m[8]);
+    c[4] = mul(m[0], m[8]) - mul(m[6], m[2]);
+    c[7] = mul(m[6], m[1]) - mul(m[0], m[7]);
+    c[2] = mul(m[1], m[5]) - mul(m[4], m[2]);
+    c[5] = mul(m[3], m[2]) - mul(m[0], m[5]);
+    c[8] = mul(m[0], m[4]) - mul(m[3], m[1]);
+    fx32 k = det != 0 ? FX_Div(inv, det) : 0;
+    for (int i = 0; i < 9; i++)
+        c[i] = mul(c[i], k);
+    for (int j = 0; j < 3; j++)
+        c[9 + j] = -(mul(c[j], m[9]) + mul(c[3 + j], m[10]) + mul(c[6 + j], m[11]));
+    for (int i = 0; i < 12; i++)
+        m[i] = c[i];
+    return true;
+}

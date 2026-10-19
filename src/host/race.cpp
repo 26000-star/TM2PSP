@@ -1,12 +1,14 @@
 // tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
 //   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto]
-// Keys: up = accelerate, down = brake/reverse, left/right = steer, R = back to the start, Esc = quit.
+// Keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
+// Enter = restart the race, Esc = quit.
 //
-// What runs is the ported game code: track scene and piece placement (slice 2), collision world (3a), car
-// parameters, engine and the full dsCarDynamics step (3b, 3c) at the game's 30 Hz. The drawing is the host G3D
-// stand-in (src/shim/host/g3d_gl.cpp) fed with the game's own models and piece matrices; the game's main loop,
-// race manager, cameras (config/cameras), HUD and the terrain builder are still to port, so the camera here is a
-// simple chase view and the Coast cliffs/beaches are missing.
+// What runs is the ported game code: track scene, piece placement and terrain (slice 2), collision world (3a), car
+// parameters, engine and the full dsCarDynamics step (3b, 3c), and the race progress (dsRaceProgress: countdown,
+// checkpoints, laps, finish, respawn), two 1/60 s ticks per 30 Hz frame as on the DS. The drawing is the host G3D
+// stand-in (src/shim/host/g3d_gl.cpp) fed with the game's own models and piece matrices; cameras
+// (config/cameras) and the HUD are still to port: the camera is a simple chase view and the race state is shown
+// in the window title and on stdout.
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +35,7 @@
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
 #include "track/dsTrack.h"
+#include "race/dsRaceProgress.h"
 
 static bool ReadFile(const std::string &path, std::vector<u8> *out)
 {
@@ -123,31 +126,13 @@ struct Race {
     dsCarParamsTable table;
     dsCarModelGeometry geo;
     std::unique_ptr<dsCarDynamics> car;
-    MtxFx43 startMatrix;
+    std::unique_ptr<dsRaceProgress> progress;
     G3Model *batch = nullptr, *carModel = nullptr;
     std::vector<std::pair<G3Model *, const dsTrackPiece *>> pieces;
 
     bool Load(const char *trackName);
-    void Restart() { car->Reset(); car->Place(startMatrix, false, true); }
     void Draw(int w, int h);
 };
-
-static bool GroundAt(fx32 x, fx32 top, fx32 z, fx32 *y)
-{
-    std::vector<dsCollisionHit> hits;
-    dsCollisionWorld *w = dsCollisionWorld::Get();
-    w->SetMasks(1, 0);
-    w->AddSegment({x, top, z}, {0, -FX32_ONE, 0}, 0xa000, &hits);
-    w->TestSegments();
-    if (hits.empty())
-        return false;
-    size_t b = 0;
-    for (size_t i = 1; i < hits.size(); i++)
-        if (hits[i].t < hits[b].t)
-            b = i;
-    *y = hits[b].point.y;
-    return true;
-}
 
 bool Race::Load(const char *trackName)
 {
@@ -174,26 +159,13 @@ bool Race::Load(const char *trackName)
     car->LoadParams(prm);
     car->pieceRotationAt = [this](const VecFx32 &p) { return track.PieceRotationAt(p); };
 
-    // Start: the first start piece; the car stands 2 units along x from the piece position, on the platform.
-    const dsTrackPiece *start = nullptr;
-    for (const dsTrackPiece *p : track.pieces)
-        if (!start && p->info && p->info->type == PIECE_START)
-            start = p;
-    for (const dsTrackPiece *p : track.pieces) // lap tracks start on their multilap piece
-        if (!start && p->info && p->info->type == PIECE_MULTILAP)
-            start = p;
-    if (!start) {
+    // Start, triggers and countdown: the race mode's full reset (ov003 0x02115af4).
+    progress.reset(new dsRaceProgress(&track, car.get()));
+    progress->Reset(true);
+    if (!progress->startPiece) {
         fprintf(stderr, "no start piece\n");
         return false;
     }
-    VecFx32 c = {start->pos.x + 0x2000, 0, start->pos.z};
-    fx32 gy = start->matrix.m[3][1];
-    GroundAt(c.x, start->matrix.m[3][1] + 0x4000, c.z, &gy);
-    MTX_RotY43_(&startMatrix, dsSin(start->rotation * 6434), dsCos(start->rotation * 6434));
-    startMatrix.m[3][0] = c.x;
-    startMatrix.m[3][1] = gy + 0x800;
-    startMatrix.m[3][2] = c.z;
-    Restart();
 
     batch = LoadModel("Tracks/coa/texturebatch");
     std::vector<u8> mb;
@@ -276,6 +248,33 @@ void Race::Draw(int w, int h)
     }
 }
 
+// Stand-in for the HUD: checkpoints, laps, clock, countdown and messages in the window title.
+static void UpdateTitle(SDL_Window *win, const dsRaceProgress &rp)
+{
+    fx32 t = rp.finished ? rp.finishTime : rp.clock;
+    int cs = (int)(((s64)(t & 0xfff) * 100) >> 12), sec = t >> 12;
+    char title[200];
+    int cps = rp.checkpointCount - (rp.startPiece && rp.startPiece->type == PIECE_MULTILAP ? 1 : 0);
+    int passed = 0;
+    for (const dsTrigger *tr : rp.Triggers())
+        if (tr->kind == dsTrigger::CHECKPOINT && !tr->pending)
+            passed++;
+    const char *msg = "";
+    if (rp.countdown)
+        msg = sec >= 2 ? "  [ 3 ]" : (sec >= 1 ? "  [ 2 ]" : "  [ 1 ]");
+    else if (rp.finished)
+        msg = "  ARRIVEE !";
+    else if (!rp.events.empty() && rp.events.back().type == dsRaceEvent::MISSED && rp.clock - rp.events.back().time < 0x3000)
+        msg = "  checkpoint(s) manque(s)";
+    snprintf(title, sizeof title, "TM2PSP host - Coast | CP %d/%d | tour %d/%d | %d:%02d.%02d%s", passed, cps,
+             rp.finished ? rp.lapCount : rp.lapsDone + 1, rp.lapCount, sec / 60, sec % 60, cs, msg);
+    static std::string last;
+    if (last != title) {
+        last = title;
+        SDL_SetWindowTitle(win, title);
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *trackName = "easy/0", *shot = nullptr;
@@ -322,7 +321,7 @@ int main(int argc, char **argv)
     Race race;
     if (!race.Load(trackName))
         return 1;
-    g_dsFrameTime = 0x88; // 1/30 s
+    size_t shownEvents = 0;
     const u32 STEP_MS = 1000 / 30;
     u32 next = SDL_GetTicks();
     bool quit = false;
@@ -333,27 +332,23 @@ int main(int argc, char **argv)
                 quit = true;
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
                 quit = true;
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_r)
-                race.Restart();
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_BACKSPACE)
+                race.progress->Reset(false);
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN)
+                race.progress->Reset(true);
         }
         const u8 *k = SDL_GetKeyboardState(nullptr);
         dsCarInput in;
         in.accel = (k[SDL_SCANCODE_UP] || autoDrive) ? FX32_ONE : 0;
         in.brake = k[SDL_SCANCODE_DOWN] ? FX32_ONE : 0;
         in.steer = (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0);
-        race.car->SetInput(in);
-        race.car->Step();
-        // Stand-in for the race manager's respawn: one second below the sea level sends the car back to the start.
-        static int underwater = 0;
-        underwater = race.car->matrix.m[3][1] < race.car->minHeight ? underwater + 1 : 0;
-        if (underwater > 30) {
-            underwater = 0;
-            race.Restart();
+        race.progress->Frame(in, 2);
+        for (; shownEvents < race.progress->events.size(); shownEvents++) {
+            static const char *const names[] = {"restart", "go", "checkpoint", "missed", "lap", "finish", "respawn"};
+            const dsRaceEvent &ev = race.progress->events[shownEvents];
+            printf("[%d.%02d] %s %d\n", ev.time >> 12, ((ev.time & 0xfff) * 100) >> 12, names[ev.type], ev.value);
         }
-        if (race.car->respawnRequest) {
-            race.car->respawnRequest = false;
-            race.Restart();
-        }
+        UpdateTitle(win, *race.progress);
         race.Draw(W, H);
         if (frames >= 0 && frame == frames - 1 && shot) {
             glFinish();

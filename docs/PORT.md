@@ -259,7 +259,8 @@ unluac decompilation of `vehicles.luac` and reads the boxes with the phase-2 BMD
   The car model takes the wheel positions from FrontWheel/RearWheel; wheel radius = hub height.
 - Body box (main 0x0204c1a4): the first model's box in `Cars/<car>/<skin>/lod1` scaled by posScale (Coast:
   1.97 x 1.18 x 4.45 m), centred on (0, H/2, 0); the snow car's box is shortened.
-- The frame time is a global (*0x020d6a78, .bss) written by the main loop; host drivers set it (1/30 s).
+- The tick time is a global (*0x020d6a78) set once to FX_Inv(60.0) = 0x44 by a static initialiser (main
+  0x020b32a0); see the race progress section for how ticks relate to frames.
 
 ### Slice 3c: car dynamics step (done)
 
@@ -271,9 +272,10 @@ its probes/contacts/impulse), `dsCarForces.cpp` (0x02127f1c), `dsCarIntegrate.cp
 (0x021222fc, 0x02127374). Shared fixed-point idioms are in `car/dsCarMath.h`.
 
 `tm_physics --root extract/files --drop` places the Coast car one unit above the start platform of coa/easy/0,
-lets it settle for 90 steps (1/30 s), drives at full throttle for 150 steps and brakes for 60.
+lets it settle for 180 ticks (1/60 s, the game's tick), drives at full throttle for 300 ticks and brakes for 120
+(until the race progress slice the host ran 1/30 s steps; the behaviour and timings are unchanged).
 `tools/host/check_drop.py` checks the behaviour (no DS trace exists yet to compare with): **0 errors**, the car
-settles level on four wheels (height 21.98 ± 0.008), reaches 15 m/s in 1.4 s, shifts to 2nd, stops when braking
+settles level on four wheels (height 21.98 Â± 0.008), reaches 15 m/s in 1.4 s, shifts to 2nd, stops when braking
 and then reverses. Two runs give identical output.
 
 - Step order: donut blend, then for player/AI input (modes 0, 3) `UpdateInputs` (0x02127af8), `Drive`
@@ -318,9 +320,9 @@ path (piece budget, replacing earlier terrain pieces) is not ported. Grid lookup
 
 ## Slice 4a: host race window (first pass)
 
-`tm_race --root extract/files [--track easy/0]` opens an SDL2 window (768 x 576) and runs the ported code at 30 Hz:
-track scene and piece placement, collision world, car parameters, engine and the full car step, driven from the
-keyboard (arrows, R = restart). `--frames N --shot out.bmp [--auto]` renders N steps off-screen and saves the
+`tm_race --root extract/files [--track easy/0]` opens an SDL2 window (768 x 576) and runs the ported code at 30 Hz
+(two 1/60 s ticks per frame): track scene and piece placement, collision world, car parameters, engine, the full
+car step and the race progress, driven from the keyboard (arrows; Backspace = last checkpoint, Enter = restart). `--frames N --shot out.bmp [--auto]` renders N steps off-screen and saves the
 last frame, which is how the renderer was checked (see `docs/host_race.png`: easy/0 after 4 s at full throttle).
 
 - **SDL2** 2.30.12 is built as a static library from the official source release, whose GPG signature was checked
@@ -331,28 +333,70 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
   display lists replayed as OpenGL 1.x primitives; all DS texture formats decoded (tex4x4 included); polygon
   attributes give culling (DS front faces are counter-clockwise in GL terms) and alpha. Track pieces take their
   materials from `material.bin` + `texturebatch.n` (format in ASSETS.md).
-- Start: the first start piece, or the multilap piece on lap tracks; the car is placed two units along x from the
-  piece position (the game's start positions come from the piece's InitPos/helpers, not ported).
+- Start, respawn, countdown, checkpoints, laps and finish: dsRaceProgress (next section); the race state is shown in
+  the window title (stand-in for the HUD) and the events on stdout.
 - Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread, the shadow quads and a
   large "cone" shape. The visual update (0x02126d10: steering angle WheelTurnVisual x steer x the steer scale,
   wheel spin, wheel surfaces, per-wheel matrices `wheelMatrix`/`wheelSideMatrix` from the display matrix +0x1f0)
   is ported. 0x020fbe48 only stores these matrices in the car model (0xa8 bytes per wheel, matrices at +0xc and
   +0x3c); the drawing code that uses them is not found yet, and lod0's shapes do not match the lod1 scale
   (body 2.6 high at up_scale 2), so tm_race does not draw wheels yet.
-- Respawn stand-in: one second below the sea level (or the car's stuck flag) puts the car back on the start.
-- Not ported yet (stand-ins in tm_race): main loop/race manager (`main()` 0x02003000), cameras (`config/cameras`,
-  a fixed chase view here), DS lighting/fog/toon (flat GL colours), sky and sea (a flat quad at 2.5), wheels, HUD,
-  checkpoints/laps, sound. tm_race builds the terrain before the collision world.
+- Not ported yet (stand-ins in tm_race): main loop (`main()` 0x02003000) and the game state machine, cameras
+  (`config/cameras`, a fixed chase view here), DS lighting/fog/toon (flat GL colours), sky and sea (a flat quad at
+  2.5), wheels, HUD, sound. tm_race builds the terrain before the collision world.
+
+## Race progress: triggers, checkpoints, laps, finish, respawn
+
+`src/game/race/dsTrigger.*` and `dsRaceProgress.*` port what the race manager dsRace (*0x02137854), the race game
+mode (vtable 0x02136828) and the HUD clock do for the local player. `tm_trackdump --triggers` +
+`tools/host/check_triggers.py` (catalogue from unluac, gate geometry and 49 crossing probes per gate recomputed in
+Python): **26 Coast tracks, 0 errors**. `tm_physics --progress` + `tools/host/check_progress.py` (countdown with the
+real car, then gates crossed by moving the car: finish too early, checkpoints, repeated checkpoint, respawn, laps,
+finish, a car left under the sea): **26 tracks, 0 errors**.
+
+- **Tick**: `*0x020d6a78` = FX_Inv(60.0) = 0x44, constant. The race update (0x02113048) steps every car `ticks`
+  times (0x0212bd68 -> dsCarDynamics_Step) and passes `ticks` to the players, the clock and the timers, so a frame
+  drawn every second VBlank is two 1/60 s ticks. The host now does the same (it ran one 1/30 s step before).
+- **Triggers** (0x02111280, 0x021114e4): every finish and multilap piece gets a "finish" trigger, every checkpoint a
+  "cp<n>" trigger numbered in piece order; the start piece of a lap track (first start or multilap piece, main
+  0x0208cdcc) takes the next number, so the count +0x134 includes it. Trigger matrix = piece matrix with row 0
+  scaled by TriggerSize.x, row 1 by TriggerSize.y, translation + InitPos (turned by the piece) + TriggerSize.z on
+  y: **TriggerSize is the width, height and height offset of a gate**, not a box (Coast default 16 x 14 raised 7;
+  the Coast finish declares 14 x 3). Stadium piece 0x10 is also turned about its forward axis (not ported).
+- **Gate** (0x02130358, 0x021304dc): plane through the centre with the unit z row as normal; per player the sign of
+  the last test point (-4095 / 0 / 4096). A test hits when the sign changed, the point is within half the diagonal
+  of rows 0/1 of the centre (dsVec_Distance, itcm 0x01ffa9d4) and, moved by the inverse matrix (main 0x02057db4:
+  inverse of a scaled 4x3 matrix), lies in (-0.55, 0.55) on x and y. Crossing either way counts; the corners of the
+  rectangle are cut by the sphere. Triggers keep an "inside" bit per player so two hits in a row count once.
+- **Test point** (0x02121738): car position + 3 x unit velocity, local player only. The sides are reset to the car's
+  position at every player reset (0x0210e124 -> 0x02121ac8), so a respawn never crosses a gate. The original reads
+  the player's car entity (+0x58 matrix, +0x10c velocity copied from the dynamics); the port reads the dynamics.
+- **Checkpoint** (listener 0x0213018c -> dsRace 0x02112f8c -> mode 0x0211527c): only while its pending flag +0xf8
+  is set; the mode counts it (+0x44) and moves the respawn point to the piece's start point (Coast: pieces 0x3c and
+  0xe8 4 units higher; 2-cell wide pieces turned 2 or 3 quarters 16 units along x).
+- **Finish** (0x021222dc -> 0x02112f50 -> mode 0x02115704): a finish track needs all checkpoints (else "N
+  checkpoints missed", HUD 0x02104620), then the clock stops (0x02104670). A lap track needs the car to have left
+  the start piece (+0x23; piece under the car 0x02112360: cell = FX_Div rounded to the nearest, then above/below,
+  then 7 units ahead) and every "cp<n>" passed; each pass counts a lap, acts as a checkpoint (respawn point) and
+  re-arms the checkpoints; the last lap finishes.
+- **Reset** (mode vtable +0x20, 0x02115af4): full = triggers recreated, start point (0x02114a6c: InitPos/InitDir of
+  the start piece), 3 s countdown (0x3000; 0.1 s when *0x020d6a70 is set), controls released at 0. Respawn = car at
+  the last respawn point, clock running; with no checkpoint passed, or after the finish, it is a full reset. The car
+  matrix comes from 0x0211c184: ground probe from 2 units above (10 long), direction snapped to the axes,
+  dsMtx43_FromAxes.
+- **Sea** (0x02115940): more than 2 units under the sea level -> 180 ticks later a respawn; the car's stuck flag
+  (owner +0xd5) also requests one. The race update handles the request at the start of the next frame.
+- Not ported: HUD drawing (lights, clock, split times 0x0210e9fc, messages), sounds, ghosts/replays, the pause
+  button, network modes, medals/records. The trigger list's per-camera update (vtable +0x1c) is visual only.
 
 ## Next slices
 
 1. **Cameras** (`config/cameras`), the race grid itself (main 0x0208cb80 + the per-cell bytes), car/car
    contacts (the +0x248 sums), and a dynamic trace of `dsCarDynamics_Step` in melonDS to compare the port bit for
    bit (the drop test only checks behaviour).
-2. Checkpoints, laps and finish: the pieces' triggers (TriggerSize) and the race manager (*0x0210fe40 in ov003).
-3. Renderer, faithful pass: Firebrand's model drawing (dsModel, visual update 0x02126d10 for wheels/shadow),
+2. Renderer, faithful pass: Firebrand's model drawing (dsModel, visual update 0x02126d10 for wheels/shadow),
    DS lighting from `config/tracks` (the eight colours), sky and sea from the environment loader (main
    0x02099e6c), then the same G3 path on the PSP (TMPM from phase 2).
-4. Main loop from `main()` (0x02003000) and the race manager (countdown, checkpoints, laps, finish) replacing the
-   tm_race stand-ins; HUD.
-5. Dynamic coverage trace in melonDS to rank the 4,200 race functions.
+3. Main loop from `main()` (0x02003000) and the game state machine around the race mode (menus, results);
+   HUD (lights, clock, checkpoint times from the HUD object *0x02137830).
+4. Dynamic coverage trace in melonDS to rank the 4,200 race functions.

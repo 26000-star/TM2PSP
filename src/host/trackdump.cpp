@@ -1,5 +1,5 @@
 // Host test driver for the second vertical slice: track loading.
-//   tm_trackdump --root <dir> [--raw] [--env coa] [--track <difficulty>/<n>] [--pieces] [--collision] [--lighting] [--terrain]
+//   tm_trackdump --root <dir> [--raw] [--env coa] [--track <difficulty>/<n>] [--pieces] [--collision] [--lighting] [--terrain] [--triggers]
 // Loads PieceData/<env>/PieceData like the race loader, then the scene <env>/<difficulty>/<n> (default easy/0)
 // like ov003 0x0211b404, and prints the piece catalogue, the track header, every placed piece and, with
 // --collision, the collision mesh of every model the track uses. tools/host/check_track.py checks the output.
@@ -16,6 +16,7 @@
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
 #include "track/dsTrack.h"
+#include "race/dsRaceProgress.h"
 #include "track/dsTrackLighting.h"
 
 static int EnvIndex(const char *name)
@@ -77,10 +78,52 @@ static void DumpMesh(const std::string &model)
            mesh.grid.cellSize[1], mesh.grid.cellSize[2], sum, lists);
 }
 
+// Race triggers of the scene (ov003 0x02111280 / 0x021114e4), the start point (0x02114a6c), and a grid of probes
+// through every gate: a point one unit behind the plane, then one unit in front, at local (u, v) on the rectangle.
+static void DumpTriggers(dsTrack &t)
+{
+    dsRaceProgress rp(&t, nullptr);
+    rp.CreateTriggers();
+    VecFx32 sp, sd;
+    rp.StartPoint(rp.startPiece, &sp, &sd);
+    int si = -1;
+    for (size_t i = 0; i < t.pieces.size(); i++)
+        if (t.pieces[i] == rp.startPiece)
+            si = (int)i;
+    printf("race checkpoints=%d laps=%d start=%d startpos=%d,%d,%d startdir=%d,%d,%d\n", rp.checkpointCount,
+           rp.lapCount, si, sp.x, sp.y, sp.z, sd.x, sd.y, sd.z);
+    static const int uv[] = {-2662, -2048, -1229, 0, 1229, 2048, 2662}; // -0.65 -0.5 -0.3 0 0.3 0.5 0.65
+    for (size_t k = 0; k < rp.Triggers().size(); k++) {
+        dsTrigger *tr = rp.Triggers()[k];
+        const MtxFx43 &m = tr->matrix;
+        const dsTriggerGate &g = tr->gate;
+        int order = tr->kind == dsTrigger::CHECKPOINT ? rp.checkpointOrder[tr->pieceIndex] : -1;
+        printf("trigger %d %s piece=%d order=%d centre=%d,%d,%d normal=%d,%d,%d d=%d radius=%d mtx=", (int)k,
+               tr->name.c_str(), tr->pieceIndex, order, g.centre.x, g.centre.y, g.centre.z, g.normal.x, g.normal.y,
+               g.normal.z, g.d, g.radius);
+        for (int r = 0; r < 4; r++)
+            printf("%d,%d,%d%s", m.m[r][0], m.m[r][1], m.m[r][2], r < 3 ? ";" : "\n");
+        for (int u : uv)
+            for (int v : uv) {
+                VecFx32 p;
+                for (int c = 0; c < 3; c++)
+                    (&p.x)[c] = (fx32)(((s64)u * m.m[0][c] + (s64)v * m.m[1][c]) >> 12) + m.m[3][c];
+                VecFx32 a = {p.x - g.normal.x, p.y - g.normal.y, p.z - g.normal.z};
+                VecFx32 b = {p.x + g.normal.x, p.y + g.normal.y, p.z + g.normal.z};
+                dsTriggerGate gg = g;
+                gg.ResetSide(0, a);
+                bool fwd = gg.Test(b, 0);
+                bool back = gg.Test(a, 0);
+                bool again = gg.Test(a, 0);
+                printf("probe %d u=%d v=%d fwd=%d back=%d again=%d\n", (int)k, u, v, fwd, back, again);
+            }
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *envName = "coa", *track = "easy/0";
-    bool raw = false, pieces = false, collision = false, lighting = false, terrain = false;
+    bool raw = false, pieces = false, collision = false, lighting = false, terrain = false, triggers = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -96,6 +139,8 @@ int main(int argc, char **argv)
             collision = true;
         else if (!strcmp(argv[i], "--terrain"))
             terrain = true;
+        else if (!strcmp(argv[i], "--triggers"))
+            triggers = true;
         else if (!strcmp(argv[i], "--lighting"))
             lighting = true;
         else {
@@ -155,6 +200,8 @@ int main(int argc, char **argv)
                    p->pos.y, p->pos.z, p->modelPath.c_str());
         }
     }
+    if (triggers)
+        DumpTriggers(t);
     if (collision)
         for (const std::string &m : models)
             DumpMesh(m);

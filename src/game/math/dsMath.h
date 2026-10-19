@@ -11,6 +11,9 @@ fx32 dsVec_Mag(const VecFx32 *v);                                          // it
 void dsVec_Normalize(const VecFx32 *v, VecFx32 *out);                      // itcm 0x01ffaac0
 void dsMtx43_RotateAxis(MtxFx43 *m, const VecFx32 *axis, fx32 s, fx32 c);    // itcm 0x01ffa730
 fx32 dsAcosFx(fx32 x);
+fx32 dsVec_Distance(const VecFx32 *a, const VecFx32 *b);                     // itcm 0x01ffa9d4
+// Inverse of a 4x3 matrix whose rows may be scaled; identity (and false) when singular. main 0x02057db4
+bool dsMtx43_InverseScaled(MtxFx43 *m);
 void dsMtx43_FromAxes(MtxFx43 *m, const VecFx32 *pos, const VecFx32 *fwd, const VecFx32 *up); // main 0x020584a4                                                     // main 0x020b29b4
 
 // Sine/cosine of an angle in fx32 radians through the SDK table, as the game inlines it everywhere:

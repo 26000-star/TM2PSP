@@ -5,6 +5,8 @@
 //            tools/host/check_raycast.py compares them with a float ray cast of the same triangles.
 // --engine   gear tables and torque curves of the four cars, and the body boxes of their models
 //            (tools/host/check_engine.py).
+// --drop     Coast car dropped on the start platform, throttle then brake (tools/host/check_drop.py).
+// --progress race progress scenario: countdown, gates, checkpoints, laps, respawn (tools/host/check_progress.py).
 #include <stdio.h>
 #include <string.h>
 
@@ -23,6 +25,7 @@
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
 #include "track/dsTrack.h"
+#include "race/dsRaceProgress.h"
 
 static int ShapeIndex(const dsTrack &t, const dsCollisionShape *s)
 {
@@ -210,12 +213,12 @@ static int Drop(dsTrack &t, const char *carName)
     m.m[3][2] = c.z;
     car.Place(m, false, false);
     printf("start piece=%d rot=%d ground=%d pos=%d,%d,%d\n", start->id, start->rotation, gy, c.x, m.m[3][1], c.z);
-    g_dsFrameTime = 0x88;
-    for (int step = 0; step < 300; step++) {
+    g_dsFrameTime = 0x44; // the game's tick, 1/60 s
+    for (int step = 0; step < 600; step++) {
         dsCarInput in;
-        if (90 <= step && step < 240)
+        if (180 <= step && step < 480)
             in.accel = FX32_ONE;
-        else if (240 <= step)
+        else if (480 <= step)
             in.brake = FX32_ONE;
         car.SetInput(in);
         car.Step();
@@ -227,10 +230,113 @@ static int Drop(dsTrack &t, const char *carName)
     return 0;
 }
 
+static const char *const kEventNames[] = {"restart", "go", "checkpoint", "missed", "lap", "finish", "respawn"};
+
+// Race progress scenario (dsRaceProgress): the real countdown with the car settling on the start, then gates
+// crossed by moving the car (5 units before the plane, then 1 unit before it, moving along the gate normal: the
+// test point is 3 units ahead), a respawn at the last checkpoint, and a car left under the sea.
+static int Progress(dsTrack &t, const char *carName)
+{
+    dsCarParamsTable table;
+    table.Load();
+    if (table.All().find(carName) == table.All().end())
+        return 1;
+    const dsCarParams &prm = table.Get(carName);
+    static dsCarModelGeometry geo;
+    if (!geo.Load(carName, 0, prm))
+        return 1;
+    t.BuildTerrain();
+    for (dsTrackPiece *pc : t.pieces)
+        pc->CreateCollision();
+    dsCarDynamics car(carName, &geo);
+    car.LoadParams(prm);
+    car.pieceRotationAt = [&t](const VecFx32 &p) { return t.PieceRotationAt(p); };
+    g_dsFrameTime = 0x44;
+    dsRaceProgress rp(&t, &car);
+    rp.Reset(true);
+    printf("race checkpoints=%d laps=%d multilap=%d%s", rp.checkpointCount, rp.lapCount,
+           rp.startPiece && rp.startPiece->type == PIECE_MULTILAP ? 1 : 0, "\n");
+    size_t shown = 0;
+    auto flush = [&](int frame) {
+        for (; shown < rp.events.size(); shown++) {
+            const dsRaceEvent &e = rp.events[shown];
+            printf("event %d %s %d time=%d%s", frame, kEventNames[e.type], e.value, e.time, "\n");
+        }
+    };
+    int frame = 0;
+    dsCarInput none;
+    for (; frame < 200 && !rp.started; frame++) {
+        rp.Frame(none, 2);
+        flush(frame);
+    }
+    for (int i = 0; i < 30; i++, frame++) {
+        rp.Frame(none, 2);
+        flush(frame);
+    }
+    const MtxFx43 &m = car.matrix;
+    printf("settled frame=%d pos=%d,%d,%d up=%d wheels=%d start=%d,%d,%d%s", frame, m.m[3][0], m.m[3][1], m.m[3][2],
+           m.m[1][1], car.groundedWheels, rp.respawnPos.x, rp.respawnPos.y, rp.respawnPos.z, "\n");
+    auto cross = [&](const dsTrigger *tr) {
+        const VecFx32 &c = tr->gate.centre, &n = tr->gate.normal;
+        for (int k : {5, 1}) {
+            car.matrix.m[3][0] = c.x - n.x * k;
+            car.matrix.m[3][1] = c.y - n.y * k;
+            car.matrix.m[3][2] = c.z - n.z * k;
+            car.velocity = {n.x * 8, n.y * 8, n.z * 8};
+            rp.AfterCarStep(2);
+            flush(frame++);
+        }
+        printf("crossed %s%s", tr->name.c_str(), "\n");
+    };
+    const dsTrigger *finish = nullptr;
+    std::vector<const dsTrigger *> cps;
+    for (const dsTrigger *tr : rp.Triggers()) {
+        if (tr->kind == dsTrigger::FINISH && !finish)
+            finish = tr;
+        if (tr->kind == dsTrigger::CHECKPOINT)
+            cps.push_back(tr);
+    }
+    if (!finish)
+        return 1;
+    cross(finish); // too early
+    for (int lap = 0; lap < rp.lapCount; lap++) {
+        for (size_t i = 0; i < cps.size(); i++) {
+            cross(cps[i]);
+            if (lap == 0 && i == 0) {
+                cross(cps[i]); // a second pass does not count
+                rp.Reset(false);
+                flush(frame++);
+                printf("respawned pos=%d,%d,%d expected=%d,%d,%d%s", car.matrix.m[3][0], car.matrix.m[3][1],
+                       car.matrix.m[3][2], rp.respawnPos.x, rp.respawnPos.y, rp.respawnPos.z, "\n");
+            }
+        }
+        cross(finish);
+    }
+    printf("finished=%d time=%d%s", rp.finished, rp.finishTime, "\n");
+    // Under the sea: 180 ticks later the car comes back to the start (nothing passed after the restart).
+    rp.Reset(true);
+    flush(frame++);
+    while (!rp.started && frame < 2000) {
+        rp.Frame(none, 2);
+        flush(frame++);
+    }
+    int sunk = frame;
+    for (int i = 0; i < 120; i++, frame++) {
+        if (i < 100) {
+            car.matrix.m[3][1] = car.minHeight - 0x3000;
+            car.velocity = {};
+        }
+        rp.Frame(none, 2);
+        flush(frame);
+    }
+    printf("sunk at frame %d%s", sunk, "\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *track = "easy/0";
-    bool raw = false, raycast = false, engine = false, drop = false;
+    bool raw = false, raycast = false, engine = false, drop = false, progress = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -244,6 +350,8 @@ int main(int argc, char **argv)
             engine = true;
         else if (!strcmp(argv[i], "--drop"))
             drop = true;
+        else if (!strcmp(argv[i], "--progress"))
+            progress = true;
         else {
             fprintf(stderr, "usage: tm_physics --root <dir> [--raw] [--track easy/0] --raycast\n");
             return 2;
@@ -269,5 +377,7 @@ int main(int argc, char **argv)
         return Raycast(t);
     if (drop)
         return Drop(t, "coa");
+    if (progress)
+        return Progress(t, "coa");
     return 0;
 }

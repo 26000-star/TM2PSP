@@ -1,6 +1,8 @@
 #include "dsTime.h"
 
-fx32 g_dsFrameTime = 0x88;
+// FX_Inv(60.0) = 0x44, set once by a static initialiser (__sinit main 0x020b32a0 from the constant 0x020c20b0).
+// @port main:020b32a0 done
+fx32 g_dsFrameTime = 0x44;
 
 // @port main:020b29e8 done
 bool dsApproach(fx32 *v, fx32 target, fx32 rate)
