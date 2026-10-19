@@ -62,7 +62,8 @@ if(TM_PLATFORM STREQUAL psp)
                   OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/tm_checks_pbp)
 
   # The race (src/psp/race_psp.cpp): G3D stand-in on sceGu, sceCtrl input.
-  add_executable(tm_race src/psp/race_psp.cpp src/app/race_session.cpp src/shim/common/g3d_model.cpp
+  add_executable(tm_race src/psp/race_psp.cpp src/app/race_session.cpp src/app/race_app.cpp
+                 src/shim/common/g3d_model.cpp
                  src/shim/psp/g3d_gu.cpp)
   target_include_directories(tm_race PRIVATE src/app src/shim/common)
   # newlib's int32_t is long on the Allegrex (same 32 bits as int): %d on s32/fx32 is harmless there.
@@ -101,7 +102,7 @@ if(TM_PLATFORM STREQUAL host)
     add_library(tm_g3d STATIC src/shim/common/g3d_model.cpp src/shim/host/g3d_gl.cpp)
     target_include_directories(tm_g3d PUBLIC src/shim/common src/shim/host)
     target_link_libraries(tm_g3d PUBLIC tm_shim OpenGL::GL)
-    add_executable(tm_race src/host/race.cpp src/app/race_session.cpp)
+    add_executable(tm_race src/host/race.cpp src/app/race_session.cpp src/app/race_app.cpp)
     target_include_directories(tm_race PRIVATE src/app)
     target_link_libraries(tm_race PRIVATE tm_game tm_g3d SDL2::SDL2main SDL2::SDL2-static)
     if(WIN32)

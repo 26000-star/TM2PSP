@@ -3,7 +3,9 @@
 # Installs the EBOOT and extract/files in PPSSPP's memstick (PSP/GAME/TM2PSP, never a real PSP), writes auto.txt,
 # waits for race_log.txt to end with the memory line, converts shot.bmp to PNG, and compares the "frame"/"camera"
 # lines with `tm_race --frames N --auto` on the host (same game code: they must be identical).
-param([string]$Track = 'easy/0', [int]$Frames = 150, [string]$Out = 'build\psp\race_shot.png', [int]$Timeout = 300)
+# -Screen menu (with -Track menu) / pause / result: captures that menu instead (no comparison with the host).
+param([string]$Track = 'easy/0', [int]$Frames = 150, [string]$Out = 'build\psp\race_shot.png', [int]$Timeout = 300,
+      [string]$Screen = '')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
@@ -12,7 +14,7 @@ New-Item -ItemType Directory -Force $g | Out-Null
 Copy-Item build\psp\tm_race\EBOOT.PBP "$g\EBOOT.PBP" -Force
 robocopy extract\files "$g\files" /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
 Remove-Item "$g\shot.bmp", "$g\race_log.txt" -ErrorAction SilentlyContinue
-"$Track $Frames" | Out-File -Encoding ascii "$g\auto.txt"
+"$Track $Frames $Screen".Trim() | Out-File -Encoding ascii "$g\auto.txt"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $p = Start-Process 'C:\Tools\PPSSPP\PPSSPPWindows64.exe' -ArgumentList "`"$g\EBOOT.PBP`"" -PassThru
 while ($sw.Elapsed.TotalSeconds -lt $Timeout -and -not $p.HasExited) {
@@ -29,6 +31,7 @@ if (Test-Path "$g\shot.bmp") {
     python -P -c "from PIL import Image; Image.open(r'$g\shot.bmp').save(r'$Out')"
     Write-Output "screenshot: $Out"
 }
+if ($Screen) { exit 0 }
 $host_lines = & build\host\tm_race.exe --root extract/files --track $Track --frames $Frames --auto --shot build\host\race_ref.bmp |
     Where-Object { $_ -match '^(frame|camera) ' }
 $psp_lines = Get-Content build\psp\race_log.txt | Where-Object { $_ -match '^(frame|camera) ' }

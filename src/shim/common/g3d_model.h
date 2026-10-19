@@ -43,6 +43,10 @@ struct G3TexSet {
 
 class G3Model {
 public:
+    G3Model() = default;
+    G3Model(const G3Model &) = delete;
+    G3Model &operator=(const G3Model &) = delete;
+    ~G3Model();                    // frees the back-end textures and data (back-end file)
     bool Load(const std::vector<u8> &file);
     // Uses the batch textures for Firebrand batch materials (texturebatch.n of the environment).
     void Draw(const G3Model *batch) const;

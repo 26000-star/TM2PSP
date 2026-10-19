@@ -13,6 +13,13 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+G3Model::~G3Model()
+{
+    for (G3Texture &t : textures)
+        if (t.gl)
+            glDeleteTextures(1, &t.gl);
+}
+
 void G3Model::Upload()
 {
     for (G3Texture &t : textures) {

@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 
+#include "collision/dsCollisionWorld.h"
 #include "core/dsTime.h"
 #include "fs/dsFileSystem.h"
 #include "math/dsMath.h"
@@ -27,7 +28,7 @@ bool RaceReadFile(const std::string &path, std::vector<u8> *out)
     return ok;
 }
 
-G3Model *RaceLoadModel(const std::string &name)
+G3Model *RaceLoadModel(const std::string &name, bool upload)
 {
     std::vector<u8> d;
     if (!RaceReadFile("graphics/" + name + ".n", &d))
@@ -37,7 +38,8 @@ G3Model *RaceLoadModel(const std::string &name)
         delete m;
         return nullptr;
     }
-    m->Upload();
+    if (upload)
+        m->Upload();
     return m;
 }
 
@@ -50,6 +52,14 @@ void RaceMatrix(const MtxFx43 &m, float *g)
     g[3] = g[7] = g[11] = 0;
     g[15] = 1;
 }
+
+RaceSession::~RaceSession()
+{
+    pieces.clear();
+    models.clear(); // G3Model's destructor frees the back-end textures and vertex arrays
+}
+
+void RaceUnloadWorld() { dsCollisionWorld::Get()->Clear(); }
 
 bool RaceSession::Load(const char *trackName)
 {
@@ -89,21 +99,31 @@ bool RaceSession::Load(const char *trackName)
         c.Reset();
     }
 
-    batch = RaceLoadModel("Tracks/coa/texturebatch");
+    auto own = [this](G3Model *m) {
+        if (m)
+            models.emplace_back(m);
+        return m;
+    };
+    // material.bin replaces the batch's texture list: upload once, after it (an upload before leaked the first
+    // list's back-end textures on every track load).
+    batch = own(RaceLoadModel("Tracks/coa/texturebatch", false));
     std::vector<u8> mb;
-    if (batch && RaceReadFile("graphics/Tracks/coa/material.bin", &mb) && batch->LoadMaterialBin(mb))
+    if (batch) {
+        if (RaceReadFile("graphics/Tracks/coa/material.bin", &mb))
+            batch->LoadMaterialBin(mb);
         batch->Upload();
+    }
     std::map<std::string, G3Model *> cache;
     for (const dsTrackPiece *p : track.pieces) {
         auto it = cache.find(p->modelPath);
         if (it == cache.end())
-            it = cache.emplace(p->modelPath, RaceLoadModel(p->modelPath)).first;
+            it = cache.emplace(p->modelPath, own(RaceLoadModel(p->modelPath))).first;
         if (it->second)
             pieces.push_back({it->second, p});
     }
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
-    carModel = RaceLoadModel("Cars/coa/0/lod1");
+    carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
     printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
            batch ? "ok" : "missing", carModel ? "ok" : "missing");
     return true;
@@ -162,6 +182,19 @@ static const Glyph kFont[] = {
     {'T', {"11111", "00100", "00100", "00100", "00100", "00100", "00100"}},
     {'U', {"10001", "10001", "10001", "10001", "10001", "10001", "01110"}},
     {'V', {"10001", "10001", "10001", "10001", "10001", "01010", "00100"}},
+    {'B', {"11110", "10001", "10001", "11110", "10001", "10001", "11110"}},
+    {'D', {"11100", "10010", "10001", "10001", "10001", "10010", "11100"}},
+    {'F', {"11111", "10000", "10000", "11110", "10000", "10000", "10000"}},
+    {'H', {"10001", "10001", "10001", "11111", "10001", "10001", "10001"}},
+    {'J', {"00111", "00010", "00010", "00010", "00010", "10010", "01100"}},
+    {'L', {"10000", "10000", "10000", "10000", "10000", "10000", "11111"}},
+    {'W', {"10001", "10001", "10001", "10101", "10101", "10101", "01010"}},
+    {'X', {"10001", "10001", "01010", "00100", "01010", "10001", "10001"}},
+    {'Y', {"10001", "10001", "01010", "00100", "00100", "00100", "00100"}},
+    {'Z', {"11111", "00001", "00010", "00100", "01000", "10000", "11111"}},
+    {'-', {"00000", "00000", "00000", "11111", "00000", "00000", "00000"}},
+    {'>', {"01000", "00100", "00010", "00001", "00010", "00100", "01000"}},
+    {'<', {"00010", "00100", "01000", "10000", "01000", "00100", "00010"}},
 };
 
 const char *const *RaceGlyph(char c)

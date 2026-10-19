@@ -24,6 +24,7 @@ struct GuTex {
     int w = 0, h = 0, psm = GU_PSM_5551;
     float su = 1, sv = 1;      // texture coordinate scale (0.5 on a mirrored axis)
     bool repeatS = true, repeatT = true;
+    size_t bytes = 0;
 };
 
 struct GuVertex {
@@ -107,6 +108,7 @@ GuTex *MakeTexture(const G3Texture &t)
     Swizzle((u8 *)g->data, linear, ow * bpp, oh);
     free(linear);
     sceKernelDcacheWritebackRange(g->data, size);
+    g->bytes = size;
     g_textureBytes += size;
     return g;
 }
@@ -224,6 +226,24 @@ struct GuSink : G3ShapeSink {
 };
 
 } // namespace
+
+G3Model::~G3Model()
+{
+    for (G3Texture &t : textures)
+        if (t.gu) {
+            GuTex *g = (GuTex *)t.gu;
+            g_textureBytes -= g->bytes;
+            free(g->data);
+            delete g;
+        }
+    if (GuModelData *data = (GuModelData *)backend) {
+        for (auto &m : data->meshes) {
+            g_meshBytes -= sizeof(GuVertex) * m.second.count;
+            free(m.second.v);
+        }
+        delete data;
+    }
+}
 
 void G3Model::Upload()
 {

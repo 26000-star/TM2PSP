@@ -24,8 +24,12 @@ struct RaceSession {
     int camIndex = 0;
     G3Model *batch = nullptr, *carModel = nullptr;
     std::vector<std::pair<G3Model *, const dsTrackPiece *>> pieces;
+    std::vector<std::unique_ptr<G3Model>> models; // owns batch, carModel and the piece models
     size_t shownEvents = 0, resets = 0;
 
+    // The track's collision shapes leave the collision world with the track; the drivers clear the world's mesh
+    // cache after deleting a session (RaceUnloadWorld) so that reloading tracks does not grow the heap.
+    ~RaceSession();
     bool Load(const char *trackName);
     // One 30 Hz frame: two 1/60 s ticks of the race with this input, events printed to stdout, the camera reset on
     // restart/respawn and updated once.
@@ -39,8 +43,10 @@ struct RaceSession {
     }
 };
 
+void RaceUnloadWorld(); // collision meshes kept by the collision world (call with no session alive)
+
 bool RaceReadFile(const std::string &path, std::vector<u8> *out);
-G3Model *RaceLoadModel(const std::string &name); // graphics/<name>.n, uploaded
+G3Model *RaceLoadModel(const std::string &name, bool upload = true); // graphics/<name>.n
 
 // DS 4x3 matrix (row vectors, fx32) to a column-major 4x4 float matrix (GL and GU layout).
 void RaceMatrix(const MtxFx43 &m, float *g);

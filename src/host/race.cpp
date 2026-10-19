@@ -1,7 +1,9 @@
 // tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
-//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto]
-// Keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
-// Enter = restart the race, C = other chase camera, Esc = quit.
+//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto] [--save file] [--screen menu|pause|result]
+// Without --track, the track menu comes first (RaceApp, src/app/race_app.h; best times in tm_race_save.txt next to
+// the program, or --save). Menus: arrows, Enter = choose, Esc = back / quit.
+// Race keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
+// Enter or Esc = pause menu (continue, restart, next track, track menu), C = other chase camera.
 //
 // What runs is the ported game code: track scene, piece placement and terrain (slice 2), collision world (3a), car
 // parameters, engine and the full dsCarDynamics step (3b, 3c), and the race progress (dsRaceProgress: countdown,
@@ -25,7 +27,7 @@
 #include "fs/dsFileSystem.h"
 #include "g3d_gl.h"
 #include "nitro.h"
-#include "race_session.h"
+#include "race_app.h"
 #include "track/dsPieceData.h"
 
 static void LookAt(const float *eye, const float *at, const float *up)
@@ -173,7 +175,18 @@ static void DrawText(float x, float y, float px, const char *s, float r, float g
     }
 }
 
-static void DrawHud(int w, int h, const dsRaceProgress &rp)
+static void DrawRect(float x, float y, float w, float h, float r, float g, float b, float a, void *)
+{
+    glColor4f(r, g, b, a);
+    glBegin(GL_QUADS);
+    glVertex2f(x, y);
+    glVertex2f(x + w, y);
+    glVertex2f(x + w, y + h);
+    glVertex2f(x, y + h);
+    glEnd();
+}
+
+static void DrawHud(int w, int h, const RaceApp &app)
 {
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -183,7 +196,9 @@ static void DrawHud(int w, int h, const dsRaceProgress &rp)
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_CULL_FACE);
-    RaceHudLayout(w, h, 1, rp, DrawText, nullptr);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    app.Overlay(w, h, 1, DrawText, DrawRect, nullptr);
     glEnable(GL_DEPTH_TEST);
 }
 
@@ -215,8 +230,9 @@ static void UpdateTitle(SDL_Window *win, const dsRaceProgress &rp)
 
 int main(int argc, char **argv)
 {
-    const char *root = "extract/files", *trackName = "easy/0", *shot = nullptr;
-    int frames = -1;
+    const char *root = "extract/files", *trackName = nullptr, *shot = nullptr, *save = nullptr,
+               *screen = nullptr;
+    int frames = -1, finishAt = -1;
     bool autoDrive = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
@@ -229,10 +245,16 @@ int main(int argc, char **argv)
             shot = argv[++i];
         else if (!strcmp(argv[i], "--top"))
             topView = true;
+        else if (!strcmp(argv[i], "--finish-at") && i + 1 < argc) // save-file test: a finish at that frame
+            finishAt = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--screen") && i + 1 < argc)
+            screen = argv[++i];
+        else if (!strcmp(argv[i], "--save") && i + 1 < argc)
+            save = argv[++i];
         else if (!strcmp(argv[i], "--auto"))
             autoDrive = true;
         else {
-            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto]\n");
+            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto] [--save file] [--screen menu|pause|result]\n");
             return 2;
         }
     }
@@ -256,9 +278,28 @@ int main(int argc, char **argv)
     }
     SDL_GL_SetSwapInterval(1);
 
-    RaceSession race;
-    if (!race.Load(trackName))
-        return 1;
+    // Save file next to the program; none for the scripted runs (--frames), which also skip the menus.
+    std::string savePath;
+    if (save) {
+        savePath = save;
+    } else if (frames < 0) {
+        if (char *base = SDL_GetBasePath()) {
+            savePath = std::string(base) + "tm_race_save.txt";
+            SDL_free(base);
+        }
+    }
+    RaceApp app(savePath, "ENTREE", "ECHAP");
+    app.menus = frames < 0;
+    bool menuShot = screen && !strcmp(screen, "menu"); // --frames N --screen menu: the track list
+    if (trackName || (frames >= 0 && !menuShot)) {
+        int index = app.FindTrack(trackName ? trackName : "easy/0");
+        if (index < 0) {
+            fprintf(stderr, "unknown track %s\n", trackName);
+            return 1;
+        }
+        if (!app.Start(index))
+            return 1;
+    }
     const u32 STEP_MS = 1000 / 30;
     u32 next = SDL_GetTicks();
     bool quit = false;
@@ -267,14 +308,37 @@ int main(int argc, char **argv)
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT)
                 quit = true;
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
-                quit = true;
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_BACKSPACE)
-                race.Respawn();
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN)
-                race.Restart();
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_c)
-                race.ToggleCamera();
+            if (e.type != SDL_KEYDOWN)
+                continue;
+            bool playing = app.screen == RaceApp::PLAYING;
+            switch (e.key.keysym.sym) {
+            case SDLK_ESCAPE:
+                quit |= !app.Press(RaceApp::BACK);
+                break;
+            case SDLK_RETURN:
+                app.Press(playing ? RaceApp::PAUSE : RaceApp::OK);
+                break;
+            case SDLK_UP:
+            case SDLK_DOWN:
+            case SDLK_LEFT:
+            case SDLK_RIGHT:
+                if (!playing)
+                    app.Press(e.key.keysym.sym == SDLK_UP     ? RaceApp::UP
+                              : e.key.keysym.sym == SDLK_DOWN ? RaceApp::DOWN
+                              : e.key.keysym.sym == SDLK_LEFT ? RaceApp::LEFT
+                                                              : RaceApp::RIGHT);
+                break;
+            case SDLK_BACKSPACE:
+                if (playing)
+                    app.race->Respawn();
+                break;
+            case SDLK_c:
+                if (playing)
+                    app.race->ToggleCamera();
+                break;
+            default:
+                break;
+            }
         }
         const u8 *k = SDL_GetKeyboardState(nullptr);
         dsCarInput in;
@@ -282,11 +346,29 @@ int main(int argc, char **argv)
         in.brake = k[SDL_SCANCODE_DOWN] ? FX32_ONE : 0;
         // The game's steer is positive to the left (seen on a real PSP-3000, same code as here).
         in.steer = (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0);
-        race.Frame(in);
-        UpdateTitle(win, *race.progress);
-        DrawRace(race, W, H);
-        DrawHud(W, H, *race.progress);
-        if (frames >= 0 && frame == frames - 1 && shot) {
+        // --screen pause|result: that menu is opened for the last scripted frame (layout check only).
+        if (frames >= 0 && frame == frames - 1 && app.race && screen && !menuShot)
+            app.screen = !strcmp(screen, "result") ? RaceApp::RESULT : RaceApp::PAUSED;
+        if (frame == finishAt && app.race) {
+            app.race->progress->finished = true;
+            app.race->progress->finishTime = app.race->progress->clock;
+        }
+        app.Frame(in);
+        if (app.race) {
+            UpdateTitle(win, *app.race->progress);
+            DrawRace(*app.race, W, H);
+        } else {
+            SDL_SetWindowTitle(win, "TM2PSP host - Coast");
+            glViewport(0, 0, W, H);
+            glClearColor(0.05f, 0.1f, 0.25f, 1);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        }
+        DrawHud(W, H, app);
+        if (frames >= 0 && frame == frames - 1 && shot && !app.race) {
+            glFinish();
+            SaveBmp(shot, W, H);
+        } else if (frames >= 0 && frame == frames - 1 && shot) {
+            RaceSession &race = *app.race;
             glFinish();
             SaveBmp(shot, W, H);
             const MtxFx43 &m = race.car->matrix;
@@ -306,6 +388,7 @@ int main(int argc, char **argv)
                 next = now;
         }
     }
+    app.Unload();
     SDL_Quit();
     return 0;
 }

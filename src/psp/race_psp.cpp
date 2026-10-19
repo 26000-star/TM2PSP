@@ -1,10 +1,14 @@
-// tm_race for the PSP: the Coast race (RaceSession, src/app) drawn with sceGu at 480 x 272, driven with sceCtrl.
-// Data next to the EBOOT: files/ = extract/files. Optional track.txt: "easy/0" (default).
-// Controls: d-pad or analog = steer, X = accelerate, square = brake/reverse, triangle = back to the last checkpoint,
-// start = restart, select = other chase camera, R = timing overlay.
-// Auto test: when auto.txt holds "<track> <frames>", the car accelerates on its own, the frame <frames> is saved to
-// shot.bmp, race_log.txt gets the same "frame/camera" lines as `tm_race --frames N --auto` on the host plus timings
-// and memory, and the program exits (tools/psp/race_shot.ps1).
+// tm_race for the PSP: the track menu (RaceApp, src/app/race_app.h) and the Coast race (RaceSession) drawn with
+// sceGu at 480 x 272, driven with sceCtrl. Data next to the EBOOT: files/ = extract/files; save.txt = best times and
+// the last track (written by the program); track.txt ("easy/0") places the menu cursor when there is no save yet.
+// Menus: d-pad, X = choose, O = back (quits from the track list), START = pause.
+// Race: d-pad or analog = steer, X = accelerate, square = brake/reverse, triangle = back to the last checkpoint,
+// START = pause menu (continue, restart, next track, track menu), select = other chase camera, R = timing overlay.
+// Auto test: when auto.txt holds "<track> <frames>", the race starts without the menu, the car accelerates on its
+// own, the frame <frames> is saved to shot.bmp, race_log.txt gets the same "frame/camera" lines as
+// `tm_race --frames N --auto` on the host plus timings and memory, and the program exits (tools/psp/race_shot.ps1).
+// Reload test: reload.txt "<count>" loads the tracks in menu order, 20 frames each, and logs the heap after each
+// unload (tools/psp/reload_test.ps1).
 #include <malloc.h>
 #include <math.h>
 #include <stdio.h>
@@ -21,7 +25,7 @@
 
 #include "fs/dsFileSystem.h"
 #include "nitro.h"
-#include "race_session.h"
+#include "race_app.h"
 
 PSP_MODULE_INFO("TM2PSP", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -209,6 +213,23 @@ void DrawRace(RaceSession &race)
     }
 }
 
+// Flat rectangle (menu panels), alpha blended.
+void DrawRect(float x, float y, float w, float h, float r, float g, float b, float a, void *)
+{
+    SpriteVertex *v = (SpriteVertex *)sceGuGetMemory(sizeof(SpriteVertex) * 2);
+    u32 c = (u32)(a * 255) << 24 | (u32)(b * 255) << 16 | (u32)(g * 255) << 8 | (u32)(r * 255);
+    v[0] = {c, (s16)lrintf(x), (s16)lrintf(y), 0};
+    v[1] = {c, (s16)lrintf(x + w), (s16)lrintf(y + h), 0};
+    sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, nullptr, v);
+}
+
+void LogMemory(const char *what)
+{
+    printf("%s heap=%u textures=%u meshes=%u files=%d\n", what, (unsigned)mallinfo().uordblks,
+           (unsigned)G3GuTextureBytes(), (unsigned)G3GuMeshBytes(), FSh_OpenFiles());
+    fflush(stdout);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -218,12 +239,15 @@ int main(int argc, char **argv)
         sceKernelStartThread(th, 0, nullptr);
     std::string dir = argc > 0 ? argv[0] : "ms0:/PSP/GAME/TM2PSP/EBOOT.PBP";
     dir = dir.substr(0, dir.find_last_of('/'));
-    char trackName[64] = "easy/0", buf[128];
-    int autoFrames = -1;
+    char trackName[64] = "", buf[128], autoScreen[16] = "";
+    int autoFrames = -1, reloads = 0;
     if (ReadText(dir + "/auto.txt", buf, sizeof buf))
-        sscanf(buf, "%63s %d", trackName, &autoFrames);
+        sscanf(buf, "%63s %d %15s", trackName, &autoFrames, autoScreen);
+    else if (ReadText(dir + "/reload.txt", buf, sizeof buf))
+        sscanf(buf, "%d", &reloads);
     else if (ReadText(dir + "/track.txt", buf, sizeof buf))
         sscanf(buf, "%63s", trackName);
+    bool scripted = autoFrames >= 0 || reloads > 0;
     FILE *log = fopen((dir + "/race_log.txt").c_str(), "wb");
     if (log)
         stdout = log; // race events and the auto test lines (newlib's stdout is assignable)
@@ -262,23 +286,42 @@ int main(int argc, char **argv)
     FSh_SetRoot((dir + "/files").c_str());
     dsFileSystem::Create();
     dsFileSystem::Get()->EnableVfs(true);
-    u64 t0 = Us();
-    RaceSession race;
-    if (!race.Load(trackName)) {
-        printf("cannot load %s\n", trackName);
-        fclose(log);
-        sceKernelExitGame();
-        return 1;
+
+    // Track menu first (RaceApp); best times and the last track in save.txt next to the EBOOT. track.txt only
+    // places the cursor when there is no save file yet. The scripted runs (auto.txt, reload.txt) write no save.
+    std::string savePath = dir + "/save.txt";
+    bool hadSave = false;
+    if (FILE *f = fopen(savePath.c_str(), "rb")) {
+        hadSave = true;
+        fclose(f);
     }
-    printf("load %u ms, heap %u bytes, textures %u bytes\n", (unsigned)((Us() - t0) / 1000),
-           (unsigned)mallinfo().uordblks, (unsigned)G3GuTextureBytes());
-    fflush(stdout);
+    RaceApp app(scripted ? "" : savePath, "X:", "O:");
+    app.menus = !scripted;
+    if (!hadSave && trackName[0] && app.FindTrack(trackName) >= 0)
+        app.selected = app.FindTrack(trackName);
+    if (reloads > 0)
+        LogMemory("start");
+    bool menuShot = !strcmp(trackName, "menu"); // auto.txt "menu <frames>": the track list
+    if ((autoFrames >= 0 && !menuShot) || reloads > 0) {
+        int index = autoFrames >= 0 ? app.FindTrack(trackName) : 0;
+        u64 t0 = Us();
+        if (!app.Start(index)) {
+            printf("cannot load %s\n", trackName);
+            fclose(log);
+            sceKernelExitGame();
+            return 1;
+        }
+        printf("load %u ms, heap %u bytes, textures %u bytes\n", (unsigned)((Us() - t0) / 1000),
+               (unsigned)mallinfo().uordblks, (unsigned)G3GuTextureBytes());
+        fflush(stdout);
+    }
 
     u32 prevButtons = 0;
+    int held = 0; // frames a menu direction has been held (auto-repeat)
     bool overlay = false;
     void *drawBuf = (void *)0;
     u64 sumUpdate = 0, sumDraw = 0, sumGpu = 0, maxFrame = 0;
-    int frames = 0, late = 0;
+    int frames = 0, late = 0, reloadsDone = 0;
     u32 vcount = sceDisplayGetVcount();
     char timing[64] = "";
     for (int frame = 0; !g_quit; frame++) {
@@ -286,16 +329,38 @@ int main(int argc, char **argv)
         sceCtrlPeekBufferPositive(&pad, 1);
         u32 b = pad.Buttons, pressed = b & ~prevButtons;
         prevButtons = b;
-        if (pressed & PSP_CTRL_TRIANGLE)
-            race.Respawn();
-        if (pressed & PSP_CTRL_START)
-            race.Restart();
-        if (pressed & PSP_CTRL_SELECT)
-            race.ToggleCamera();
+        bool playing = app.screen == RaceApp::PLAYING;
+        if (playing) {
+            if (pressed & PSP_CTRL_TRIANGLE)
+                app.race->Respawn();
+            if (pressed & PSP_CTRL_SELECT)
+                app.race->ToggleCamera();
+            if (pressed & PSP_CTRL_START)
+                app.Press(RaceApp::PAUSE);
+        } else {
+            // Menus: d-pad with auto-repeat after 12 frames, every 3 frames.
+            const u32 dirs = PSP_CTRL_UP | PSP_CTRL_DOWN | PSP_CTRL_LEFT | PSP_CTRL_RIGHT;
+            held = b & dirs ? held + 1 : 0;
+            u32 dirKeys = pressed | (held > 12 && held % 3 == 0 ? b : 0);
+            if (dirKeys & PSP_CTRL_UP)
+                app.Press(RaceApp::UP);
+            if (dirKeys & PSP_CTRL_DOWN)
+                app.Press(RaceApp::DOWN);
+            if (dirKeys & PSP_CTRL_LEFT)
+                app.Press(RaceApp::LEFT);
+            if (dirKeys & PSP_CTRL_RIGHT)
+                app.Press(RaceApp::RIGHT);
+            if (pressed & PSP_CTRL_CROSS)
+                app.Press(RaceApp::OK);
+            if (pressed & PSP_CTRL_START)
+                app.Press(RaceApp::PAUSE);
+            if ((pressed & PSP_CTRL_CIRCLE) && !app.Press(RaceApp::BACK))
+                g_quit = true;
+        }
         if (pressed & PSP_CTRL_RTRIGGER)
             overlay = !overlay;
         dsCarInput in;
-        in.accel = (b & PSP_CTRL_CROSS) || autoFrames >= 0 ? FX32_ONE : 0;
+        in.accel = (b & PSP_CTRL_CROSS) || scripted ? FX32_ONE : 0;
         in.brake = b & PSP_CTRL_SQUARE ? FX32_ONE : 0;
         // D-pad: full lock like the DS; analog: proportional outside a dead zone (the DS has no analog input).
         int ax = pad.Lx - 128;
@@ -312,15 +377,24 @@ int main(int argc, char **argv)
             steer = -FX32_ONE;
         in.steer = -steer; // the game's steer is positive to the left (seen on a real PSP-3000)
 
+        // auto.txt "<track> <frames> pause|result": that menu is opened for the last frame (layout check only).
+        if (autoFrames >= 0 && frame == autoFrames - 1 && app.race && autoScreen[0])
+            app.screen = !strcmp(autoScreen, "result") ? RaceApp::RESULT : RaceApp::PAUSED;
         u64 a = Us();
-        race.Frame(in);
+        app.Frame(in);
         u64 m = Us();
         sceGuStart(GU_DIRECT, g_list);
-        DrawRace(race);
+        if (app.race) {
+            DrawRace(*app.race);
+        } else {
+            sceGuClearColor(0xff401a0d);
+            sceGuClearDepth(0);
+            sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+        }
         sceGuDisable(GU_DEPTH_TEST);
         sceGuDisable(GU_TEXTURE_2D);
         sceGuDisable(GU_CULL_FACE);
-        RaceHudLayout(SCR_W, SCR_H, 0.5f, *race.progress, DrawText, nullptr);
+        app.Overlay(SCR_W, SCR_H, 0.5f, DrawText, DrawRect, nullptr);
         if (overlay)
             DrawText(4, SCR_H - 12, 1.5f, timing, 1, 1, 1, nullptr);
         sceGuEnable(GU_DEPTH_TEST);
@@ -337,7 +411,13 @@ int main(int argc, char **argv)
         snprintf(timing, sizeof timing, "%u.%u %u.%u %u.%u", (unsigned)((m - a) / 1000), (unsigned)((m - a) / 100 % 10),
                  (unsigned)((d - m) / 1000), (unsigned)((d - m) / 100 % 10), (unsigned)((e - d) / 1000),
                  (unsigned)((e - d) / 100 % 10));
-        if (autoFrames >= 0 && frame == autoFrames - 1) {
+        if (autoFrames >= 0 && frame == autoFrames - 1 && !app.race) {
+            SaveBmp((dir + "/shot.bmp").c_str(), (const u8 *)0x04000000 + (uintptr_t)drawBuf);
+            printf("memory heap=%u bytes (menu)\n",(unsigned)mallinfo().uordblks);
+            fflush(stdout);
+            g_quit = true;
+        } else if (autoFrames >= 0 && frame == autoFrames - 1) {
+            RaceSession &race = *app.race;
             SaveBmp((dir + "/shot.bmp").c_str(), (const u8 *)0x04000000 + (uintptr_t)drawBuf);
             const MtxFx43 &mm = race.car->matrix;
             printf("frame %d pos=%d,%d,%d speed=%d gear=%d\n", frame, mm.m[3][0], mm.m[3][1], mm.m[3][2],
@@ -353,6 +433,19 @@ int main(int argc, char **argv)
             fflush(stdout);
             g_quit = true;
         }
+        // Reload test (reload.txt "<count>"): every 20 frames the next track of the menu is loaded; the heap, the
+        // back-end texture and vertex bytes and the open files are logged with no session alive.
+        if (reloads > 0 && frame % 20 == 19) {
+            int next = (app.track + 1) % 26;
+            app.Unload();
+            snprintf(buf, sizeof buf, "reload %d", ++reloadsDone);
+            LogMemory(buf);
+            if (reloadsDone >= reloads || !app.Start(next)) {
+                printf("reload test done\n");
+                fflush(stdout);
+                g_quit = true;
+            }
+        }
         // 30 Hz: the frame is shown at the second VBlank after the previous one (later when the frame is late).
         u32 now = sceDisplayGetVcount();
         if (now - vcount > 2)
@@ -362,6 +455,7 @@ int main(int argc, char **argv)
         vcount = sceDisplayGetVcount();
         drawBuf = sceGuSwapBuffers();
     }
+    app.Unload();
     fflush(stdout);
     if (log)
         fclose(log);

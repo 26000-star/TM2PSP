@@ -541,32 +541,32 @@ at 480 x 272, 8888 colour, 16-bit depth.
 
 ## Bilan de la phase 4 (rapport, 2026-10-19)
 
-**Objectif atteint : la course Coast se joue dans PPSSPP depuis un EBOOT prêt à copier sur la PSP-3000.**
+**Objectif atteint : la course Coast se joue dans PPSSPP depuis un EBOOT prÃªt Ã  copier sur la PSP-3000.**
 `build/psp/tm_race/EBOOT.PBP` (paquet complet : `tools/psp/package.ps1` -> `build/psp/package/PSP/GAME/TM2PSP`)
-charge la piste et son terrain, lance le compte à rebours et fait tourner la vraie physique du jeu (2 pas de 1/60 s
-par image à 30 Hz), la progression de course et la caméra poursuite, dessinées par sceGu en 480 x 272, avec le HUD
-de substitution ; commandes sceCtrl (croix, carré, croix directionnelle ou stick, triangle, START, SELECT).
+charge la piste et son terrain, lance le compte Ã  rebours et fait tourner la vraie physique du jeu (2 pas de 1/60 s
+par image Ã  30 Hz), la progression de course et la camÃ©ra poursuite, dessinÃ©es par sceGu en 480 x 272, avec le HUD
+de substitution ; commandes sceCtrl (croix, carrÃ©, croix directionnelle ou stick, triangle, START, SELECT).
 
-Vérifications : 
-- le code du jeu n'a pas changé pour la PSP (seuls `src/shim/psp`, `src/psp`, `src/app`, CMake et les outils sont
+VÃ©rifications : 
+- le code du jeu n'a pas changÃ© pour la PSP (seuls `src/shim/psp`, `src/psp`, `src/app`, CMake et les outils sont
   nouveaux) et compile sans avertissement ;
-- les 114 vérifications de l'hôte tournent sur la PSP (PPSSPP) : 2,1 Mo de sorties **identiques octet pour octet** à
-  l'hôte, 0 erreur des vérificateurs ;
-- la course complète (boucle, entrée, caméra) donne après 150 images (easy/0) et 600 images (hard/0, 3 tours)
-  **le même état de voiture et de caméra** que l'hôte ; l'image PSP montre la même scène (`docs/psp_race.png`) ;
-- l'hôte reste à 0 erreur (`tools/host/run_checks.py`) et son rendu est identique au pixel près après la
-  séparation G3D commun / back-ends.
+- les 114 vÃ©rifications de l'hÃ´te tournent sur la PSP (PPSSPP) : 2,1 Mo de sorties **identiques octet pour octet** Ã 
+  l'hÃ´te, 0 erreur des vÃ©rificateurs ;
+- la course complÃ¨te (boucle, entrÃ©e, camÃ©ra) donne aprÃ¨s 150 images (easy/0) et 600 images (hard/0, 3 tours)
+  **le mÃªme Ã©tat de voiture et de camÃ©ra** que l'hÃ´te ; l'image PSP montre la mÃªme scÃ¨ne (`docs/psp_race.png`) ;
+- l'hÃ´te reste Ã  0 erreur (`tools/host/run_checks.py`) et son rendu est identique au pixel prÃ¨s aprÃ¨s la
+  sÃ©paration G3D commun / back-ends.
 
-Mesures (PPSSPP, vitesse de CPU PSP émulée ; **vitesse réelle sur console non vérifiée**) : ~7 ms de CPU par image
+Mesures (PPSSPP, vitesse de CPU PSP Ã©mulÃ©e ; **vitesse rÃ©elle sur console non vÃ©rifiÃ©e**) : ~7 ms de CPU par image
 sur 33 ms disponibles, chargement 0,6 s, tas 2,9 Mo sur 52 Mo (le PSP-1000 32 Mo devrait suffire aussi). Le temps du
 GE n'est pas mesurable dans PPSSPP.
 
-Reste à faire (étape suivante pour l'utilisateur : copier `build\psp\package\PSP` sur la Memory Stick et
+Reste Ã  faire (Ã©tape suivante pour l'utilisateur : copier `build\psp\package\PSP` sur la Memory Stick et
 essayer sur la console, ce que l'automatisation n'a pas le droit de faire) :
-- mesurer sur la vraie PSP (touche R : temps de mise à jour / construction de liste / attente GE) ; si le GE est
-  trop lent : sommets 16 bits, textures en VRAM, culling des pièces hors champ ;
-- fidélité (inchangé depuis la phase 3) : HUD du jeu, éclairage DS (`config/tracks`), ciel, roues/ombre, menus,
-  son (sceAudio), gestionnaire de caméras ; sur PSP en plus : brouillard et éventuelle profondeur 16 bits à affiner.
+- mesurer sur la vraie PSP (touche R : temps de mise Ã  jour / construction de liste / attente GE) ; si le GE est
+  trop lent : sommets 16 bits, textures en VRAM, culling des piÃ¨ces hors champ ;
+- fidÃ©litÃ© (inchangÃ© depuis la phase 3) : HUD du jeu, Ã©clairage DS (`config/tracks`), ciel, roues/ombre, menus,
+  son (sceAudio), gestionnaire de camÃ©ras ; sur PSP en plus : brouillard et Ã©ventuelle profondeur 16 bits Ã  affiner.
 
 ### Feedback from the real PSP-3000 (2026-10-19, user test)
 
@@ -579,3 +579,33 @@ essayer sur la console, ce que l'automatisation n'a pas le droit de faire) :
   state unchanged. **Confirmed on the PSP-3000 by the user: steering correct, the track no longer vanishes.**
 - The package now holds only `vfs.zip`, `vfs.bin` and `vfs.dat` (26.9 MB): the race reads nothing else (checked
   in PPSSPP from the package folder).
+
+## Phase 5: polish on the real PSP and fidelity
+
+### Step 1: track menu, best times, leak-free reloads (done)
+
+`src/app/race_app.*` (`RaceApp`, shared by both drivers, a port stand-in: the game's own front end is not ported)
+puts a track menu in front of the race: the 26 Coast tracks in the game's order (practice, easy, medium, hard,
+extreme, bonus), each with its best time; up/down move, left/right jump 5 tracks, OK starts. During the race,
+START (PSP) / Enter or Esc (host) opens the pause menu: continue, restart, next track, track menu. 3 s after a
+finish the result menu shows the time, the record (or "NOUVEAU RECORD!") and restart / next track / track menu.
+The 5 x 7 HUD font gained the missing letters (B D F H J L W X Y Z) and `- < >`.
+
+- Save file: `save.txt` next to the EBOOT (host: `tm_race_save.txt` next to the program, or `--save`), text lines
+  `last <track>` and `best <track> <fx32 time>`, written when a track starts and on a new record. `track.txt` only
+  places the cursor when there is no save yet. Checked on the host with `--finish-at N` (a forced finish at frame N):
+  a better time replaces the record, a worse one does not, records are per track, the cursor comes back on the last
+  track.
+- Scripted runs keep their behaviour: `auto.txt` / `--frames N` start the track directly, write no save and open no
+  menu, so `race_shot.ps1` still compares the car and camera with the host (hard/0 600 frames: identical). New:
+  `race_shot.ps1 -Screen menu|pause|result` (host `--screen`) captures a menu for a layout check.
+- **Leak found and fixed:** the texture batch was uploaded before `material.bin` replaced its texture list, so the
+  first list's back-end textures (668 KB) were never freed; it is now uploaded once, after `material.bin` (textures
+  in use on a track: 1.0 MB instead of 1.7 MB). `G3Model` now frees its back-end textures and vertex arrays (PSP)
+  / GL textures (host) in its destructor; `RaceSession` owns its models; `RaceUnloadWorld()` clears the collision
+  world's mesh cache after a session is deleted.
+- **Check:** `powershell -ExecutionPolicy Bypass -File tools/psp/reload_test.ps1 [-Count 32]` (PPSSPP,
+  `reload.txt`) loads the tracks in menu order, 20 drawn frames each, and logs after each unload the heap, the
+  sceGu back-end's texture and vertex bytes and `FSh_OpenFiles()`. Result over 32 loads (every track, then 6 more):
+  textures 0, vertices 0, 1 open file (the VFS archive, as before the first load), heap 203,832 bytes from the 3rd
+  unload on (one container of the game singletons grows by 512 bytes once at the 3rd load, then nothing moves).
