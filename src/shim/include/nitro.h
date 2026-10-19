@@ -83,6 +83,8 @@ static inline u32 FS_GetPosition(const FSFile *file) { return file->pos - file->
 
 /* Host only: directory that stands for the ROM's file system root (holds vfs.zip, vfs.dat, vfs.bin). */
 void FSh_SetRoot(const char *dir);
+/* Diagnostics: number of files open through FS_OpenFile. */
+int FSh_OpenFiles(void);
 
 /* ---- OS ---- */
 void OS_Printf(const char *fmt, ...);

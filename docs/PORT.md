@@ -1,4 +1,4 @@
-# Port architecture (phase 3)
+# Port architecture (phases 3 and 4)
 
 Goal of phase 3: run the race mode of **one environment** on a Windows host, built from decompiled game code plus a
 "Nitro-on-host" shim. Phase 4 swaps the shim's back-ends for the PSP (`sceGu`, `sceCtrl`, `sceIo`, `sceAudio`); the
@@ -457,3 +457,50 @@ au bit près. La phase 4 (back-ends PSP du shim) peut démarrer sur cette base.
    the game's HUD (lights, clock, checkpoint times from the HUD object *0x02137830) in place of tm_race's
    bitmap-font stand-in.
 4. Dynamic coverage trace in melonDS to rank the 4,200 race functions.
+
+## Phase 4: PSP back-ends
+
+Goal: the same game code (`src/game` unchanged) running on the PSP (PSP-3000 target, 64 MB, extended partition),
+first proven bit-exact against the host, then drawn with `sceGu` and driven with `sceCtrl`.
+
+### Build (step 1, done)
+
+`bash tools/psp_build.sh` runs psp-cmake (pspdev, gcc 15.2, in the WSL distro Ubuntu-24.04) on the root
+`CMakeLists.txt` in `~/tm2psp-build/game` inside the distro (much faster than `/mnt/c`), then copies each EBOOT to
+`build/psp/<program>/EBOOT.PBP`. Release build (`-O2` from the toolchain file's defaults), 0 warnings. `PSP` selects
+`src/shim/psp`; zlib is pspdev's `libz`. EBOOTs are made with `MEMSIZE 1` (PARAM.SFO: the extended 52 MB user
+partition on a PSP-2000/3000) and `PSP_HEAP_SIZE_KB(-1024)` (the whole partition minus 1 MB as heap).
+
+- `fs_psp.c`: the FS shim on sceIo. Same path rules as the host (root + relative path, `\` or `/`; FAT is
+  case-insensitive like Windows). The handle is shared between `FSFile` copies (the game's unzip copies the struct
+  as a second cursor), so it remembers the OS file position and seeks only when the cursor differs.
+- `os_psp.c`: `OS_Printf` to stderr (PPSSPP log / PSPLink), `OS_Panic` prints and returns to the XMB.
+- Portability fixes needed in the game code: none. newlib's `int32_t` is `int` on the Allegrex, so the `%d`
+  formats stay valid, and the code already avoided `sizeof(void *) == 4` assumptions for the 64-bit host.
+
+### Bit-exact check on the PSP (step 2, done)
+
+`src/checks/suite.cpp` runs the three host test drivers (`cfgdump.cpp`, `trackdump.cpp`, `physicstest.cpp`, each
+compiled once more with `main` renamed, see `src/checks/*_entry.cpp`) in one process over a list of checks
+(`python -P tools/host/run_checks.py --list`), writing each check's stdout to `<out>/<name>.txt`; between checks the
+collision world is cleared and the file system singleton deleted, so each check starts as a new process would. The
+host entry is `tm_checksuite`, the PSP one the `tm_checks` EBOOT (`src/psp/checks_psp.cpp`: data next to the EBOOT,
+`files/` = `extract/files`, `checks.txt`, output in `out/`, `out/suite.log` written last).
+
+`powershell -ExecutionPolicy Bypass -File tools/psp/run_checks_psp.ps1` runs the host suite, installs the EBOOT,
+the list and the ROM files in PPSSPP's memstick (`PSP/GAME/TM2PSPCHK`, never a real PSP), waits for the log,
+compares the dumps byte for byte (`tools/psp/compare_checks.py`) and runs the host checkers on the PSP dumps.
+`tools/host/run_checks.py` runs every host check (114: car parameters, cameras, engine, ray casts, drop test, and
+for the 26 Coast tracks pieces/collision/lighting, terrain, triggers and race progress, plus 5 camera runs).
+
+Result (2026-10-19, PPSSPP 1.20.4): **114 dumps, 2,137,856 bytes, 0 differences; host checkers: 0 errors on the PSP
+dumps.** The suite's in-process outputs are also identical to the separate host runs. Fixed point is exact on the
+Allegrex as expected (no floats in the game logic). Time: 4.3 s on the host, 104 s of emulated PSP time (PPSSPP
+runs the CPU at the PSP's 222 MHz by default; real-hardware speed unverified): a progress run (~1,000 ticks of car
+physics plus loading) takes 2.2-3.5 s, a track load with collision meshes ~0.45 s. Heap in use between checks:
+72 KB (no leak across 114 checks).
+
+Finding: on the PSP, `freopen` on `stdout` leaks one sceIo descriptor per call (newlib/cglue); after 59 calls opens
+fail, and the game's loaders then hang. The suite assigns newlib's `stdout` to an `fopen`ed file instead (host:
+`freopen`). `FSh_OpenFiles()` (both back-ends) counts the files open through the FS shim; `suite.log` records it
+with the heap in use after each check: 0 everywhere.

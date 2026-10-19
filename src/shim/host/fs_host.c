@@ -10,10 +10,16 @@
 
 static char g_root[512] = ".";
 static char g_cwd[256] = "";
+static int g_open; /* files open now (FSh_OpenFiles) */
 
 void FSh_SetRoot(const char *dir)
 {
     snprintf(g_root, sizeof g_root, "%s", dir);
+}
+
+int FSh_OpenFiles(void)
+{
+    return g_open;
 }
 
 void FS_Init(u32 default_dma_no)
@@ -61,6 +67,7 @@ BOOL FS_OpenFile(FSFile *file, const char *path)
     fseek(fp, 0, SEEK_END);
     size = ftell(fp);
     file->handle = fp;
+    g_open++;
     file->top = 0;
     file->bottom = (u32)size;
     file->pos = 0;
@@ -69,8 +76,10 @@ BOOL FS_OpenFile(FSFile *file, const char *path)
 
 BOOL FS_CloseFile(FSFile *file)
 {
-    if (file->handle)
+    if (file->handle) {
         fclose((FILE *)file->handle);
+        g_open--;
+    }
     file->handle = NULL;
     return TRUE;
 }

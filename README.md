@@ -182,5 +182,25 @@ python -P tools/host/check_track.py build/host/track.txt --track easy/0
 ```
 
 ```bash
+python -P tools/host/run_checks.py
+```
+
+```bash
 python -P tools/analysis/port_status.py --race-only
+```
+
+## Phase 4: PSP back-ends (in progress)
+
+- **The game libraries build for the PSP** (`bash tools/psp_build.sh`: psp-cmake + pspdev in WSL, 0 warnings) with
+  the shim's PSP back-ends (`src/shim/psp`: sceIo file system, OS services).
+- **Bit-exact on the PSP:** the check suite (`tm_checksuite` on the host, `tm_checks` EBOOT on the PSP) runs the
+  114 host checks' producers in PPSSPP; the 2.1 MB of dumps are identical byte for byte to the host's and the host
+  checkers find 0 errors in them (`tools/psp/run_checks_psp.ps1`).
+
+```bash
+bash tools/psp_build.sh
+```
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/psp/run_checks_psp.ps1
 ```
