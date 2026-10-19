@@ -169,7 +169,7 @@ void dsCarDynamics::Reset()
     stuckTime = 0;
 }
 
-// @port ov003:021279e8 partial (the visual update of the car model, 0x02126d10, is not ported)
+// @port ov003:021279e8 done (the car model's reset 0x020fbf20 is left to the renderer)
 void dsCarDynamics::Place(const MtxFx43 &m, bool updateVisual, bool warm)
 {
     dsMtx43_Copy(&m, &matrix);
@@ -187,7 +187,8 @@ void dsCarDynamics::Place(const MtxFx43 &m, bool updateVisual, bool warm)
     velocity = acceleration = angularVelocity = {};
     unk400 = 0;
     roughTime = 0;
-    (void)updateVisual;
+    if (updateVisual)
+        UpdateVisual();
     probeLength = 0x1800;
     noThrottle = false;
     turboTimer = 0;

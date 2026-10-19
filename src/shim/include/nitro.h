@@ -56,6 +56,7 @@ typedef struct { fx32 m[4][3]; } MtxFx43;
 fx32 VEC_DotProduct(const VecFx32 *a, const VecFx32 *b);
 void VEC_CrossProduct(const VecFx32 *a, const VecFx32 *b, VecFx32 *out);
 void MTX_RotY43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal);
+void MTX_RotX43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal);
 int MTX_Inverse43(const MtxFx43 *src, MtxFx43 *dst); /* 0 on success, -1 when singular */
 void MTX_Concat43(const MtxFx43 *a, const MtxFx43 *b, MtxFx43 *ab);
 u16 FX_AcosIdx(fx32 x);

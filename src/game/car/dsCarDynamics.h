@@ -78,7 +78,10 @@ public:
     void Forces();                                 // ov003 0x02127f1c (dsCarForces.cpp)
 
     void UpdateWheels();                           // ov003 0x02127374 (dsCarStep.cpp)
-    void UpdateWheelSurfaces();                    // part of ov003 0x02126d10
+    // Display side of the wheels: steering angle, spin, surfaces and the wheel matrices. ov003 0x02126d10
+    void UpdateVisual();
+    MtxFx43 wheelMatrix[4];                        // spin (+ steer for the front pair) at the hub, world space
+    MtxFx43 wheelSideMatrix[4];                    // same without the spin
     void Step();                                   // ov003 0x021222fc (dsCarStep.cpp)
     void Surfaces();                               // ov003 0x02122b54 (dsCarSurfaces.cpp)
     void Drive();                                  // ov003 0x0212a9c0 (dsCarGrip.cpp)

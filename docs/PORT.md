@@ -320,8 +320,11 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
   materials from `material.bin` + `texturebatch.n` (format in ASSETS.md).
 - Start: the first start piece, or the multilap piece on lap tracks; the car is placed two units along x from the
   piece position (the game's start positions come from the piece's InitPos/helpers, not ported).
-- Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread at the origin, the shadow
-  quads and a large "cone" shape that the game positions or hides itself in the visual update (0x02126d10).
+- Car: `lod1` is drawn (body at the physics scale). `lod0` holds one wheel and tread, the shadow quads and a
+  large "cone" shape. The visual update (0x02126d10: steering angle WheelTurnVisual x steer x the steer scale,
+  wheel spin, wheel surfaces, per-wheel matrices `wheelMatrix`/`wheelSideMatrix` from the display matrix +0x1f0)
+  is ported; drawing the lod0 wheels with them still needs the car model's placement code (ov003 0x020fbe48,
+  0x020fbe38, model fields +0xf0..+0x107), so tm_race does not draw wheels yet.
 - Not ported yet (stand-ins in tm_race): main loop/race manager (`main()` 0x02003000), cameras (`config/cameras`,
   a fixed chase view here), DS lighting/fog/toon (flat GL colours), the Coast terrain builder (cliffs and beaches
   are missing, the sea is a flat quad at 2.5), wheels, HUD, checkpoints/laps, sound.

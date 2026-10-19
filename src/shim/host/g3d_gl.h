@@ -42,6 +42,8 @@ public:
     bool Load(const std::vector<u8> &file);
     // Uses the batch textures for Firebrand batch materials (texturebatch.n of the environment).
     void Draw(const G3Model *batch) const;
+    // One shape with one material, without node matrix or scale (parts the game places itself: wheels).
+    void DrawPart(int material, int shape, const G3Model *batch) const;
     void Upload();                 // creates the GL textures (needs a current context)
     // Firebrand's Tracks/<env>/material.bin, loaded next to texturebatch.n (main 0x0205513c): u32 count,
     // u32 offset of the names (from +8), `count` NNS material records (u16 tag, u16 size, then
@@ -67,5 +69,6 @@ public:
     G3TexSet texSet;               // TEX0 of this container (kept for material.bin)
 
 private:
+    void DrawOps(const std::vector<Op> &ops, const G3Model *batch) const;
     void DrawShape(const std::vector<u8> &dl, const G3Texture *t) const;
 };

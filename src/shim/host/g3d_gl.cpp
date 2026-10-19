@@ -524,6 +524,16 @@ void G3Model::DrawShape(const std::vector<u8> &dl, const G3Texture *t) const
 
 void G3Model::Draw(const G3Model *batch) const
 {
+    DrawOps(ops, batch);
+}
+
+void G3Model::DrawPart(int material, int shape, const G3Model *batch) const
+{
+    DrawOps({{1, material}, {2, shape}}, batch);
+}
+
+void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
+{
     glFrontFace(G3_FRONT_FACE);
     glPushMatrix();
     float scale = 1;

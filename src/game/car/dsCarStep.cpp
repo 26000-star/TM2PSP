@@ -18,7 +18,6 @@ void dsCarDynamics::UpdateWheels()
 {
     for (int i = 0; i < 4; i++)
         wheels[i]->UpdateCompression();
-    UpdateWheelSurfaces();
     fx32 ext[4];
     fx32 mx = 0;
     for (int i = 0; i < 4; i++) {
@@ -38,6 +37,7 @@ void dsCarDynamics::UpdateWheels()
     dsApproach(&wheelBlend, OVER_TRAVEL < mx ? FX32_ONE : 0, 0x4000);
     if (wheelBlend == 0) {
         dsMtx43_Copy(&matrix, &prevMatrix);
+        UpdateVisual();
         return;
     }
     VecFx32 pw[4];
@@ -66,17 +66,43 @@ void dsCarDynamics::UpdateWheels()
     dsMtx43_Copy(&m, &prevMatrix);
     if (turboTimer != 0)
         dsMtx43_Copy(&prevMatrix, &matrix);
+    UpdateVisual();
 }
 
-// Material under each wheel from its probe's nearest hit (-1 without hit), the physics part of the visual
-// update; it runs at the end of the step in the original (from UpdateWheels), the port does it first.
-// @port ov003:02126d10 partial (only the wheel surfaces; wheel/body display matrices go to the renderer)
-void dsCarDynamics::UpdateWheelSurfaces()
+// @port ov003:02126d10 partial (the car model's own inputs at the end, +0xf0/+0xf4 roll/pitch, wheel speed
+// and the reverse-light flag +0x107, are left to the renderer; the rear wheels' spin argument is lost in the
+// decompilation and taken as the forward speed like the front pair)
+void dsCarDynamics::UpdateVisual()
 {
+    if (inputMode == 3)
+        wheelTurn = 0;
+    if (wheels.size() != 4 || !model)
+        return;
+    if (inputMode == 3)
+        wheelTurn = Mul(Mul(steer, p.d_WheelTurnVisual), s_steerScale);
+    MtxFx43 steerM, spinM, sideM;
+    MTX_RotY43_(&steerM, dsSin(wheelTurn), dsCos(wheelTurn));
+    dsMtx43_Identity(&spinM);
+    dsMtx43_Identity(&sideM);
     for (int i = 0; i < 4; i++) {
         dsCarWheel *w = wheels[i];
+        if (!s_resting)
+            w->Spin(forwardSpeed);
+        if (i == 0) {
+            MTX_RotX43_(&spinM, dsSin(w->spin), dsCos(w->spin));
+            MTX_Concat43(&spinM, &steerM, &spinM);
+            dsMtx43_Copy(&steerM, &sideM);
+        } else if (i == 2) {
+            MTX_RotX43_(&spinM, dsSin(w->spin), dsCos(w->spin));
+            dsMtx43_Identity(&sideM);
+        }
         const auto &h = wheelHits[i];
         w->surface = h.empty() ? -1 : (s32)(s8)h[w->hit].material;
+        VecFx32 hub = w->HubPosition(prevMatrix);
+        MtxFx43 cm = prevMatrix;
+        SetRow(cm, 3, hub);
+        MTX_Concat43(&spinM, &cm, &wheelMatrix[i]);
+        MTX_Concat43(&sideM, &cm, &wheelSideMatrix[i]);
     }
 }
 

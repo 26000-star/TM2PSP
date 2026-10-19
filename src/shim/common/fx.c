@@ -162,3 +162,12 @@ u16 FX_AcosIdx(fx32 x)
     }
     return (u16)((mid * 2 + 1) << 3);
 }
+
+/* MTX_RotX43_ 0x0202b258: rotation about x by (sin, cos), no translation. */
+void MTX_RotX43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal)
+{
+    mtx->m[0][0] = FX32_ONE; mtx->m[0][1] = 0;       mtx->m[0][2] = 0;
+    mtx->m[1][0] = 0;        mtx->m[1][1] = cosVal;  mtx->m[1][2] = sinVal;
+    mtx->m[2][0] = 0;        mtx->m[2][1] = -sinVal; mtx->m[2][2] = cosVal;
+    mtx->m[3][0] = 0;        mtx->m[3][1] = 0;       mtx->m[3][2] = 0;
+}
