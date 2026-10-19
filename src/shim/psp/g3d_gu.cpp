@@ -9,6 +9,7 @@
 //    the GE takes at most 512 x 512, larger textures are halved (nearest).
 #include "g3d_model.h"
 
+#include <alloca.h>
 #include <malloc.h>
 #include <math.h>
 #include <string.h>
@@ -37,6 +38,8 @@ struct GuVertex {
     float u, v;
     u32 color;
     float x, y, z;
+    float n[3];   // last NORMAL in node space (lit meshes), for the relighting of dynamic meshes
+    bool hasN;    // the colour came from that normal
 };
 
 // Drawn vertex, 16 bytes: the DS positions are 4.12 fixed point within +-8 (VTX_16; VTX_10 and VTX_XY/XZ/YZ are
@@ -56,6 +59,10 @@ struct GuMesh {
     GuVertex16 *v = nullptr;
     int count = 0;
     float su = 0, sv = 0; // sceGuTexScale for this mesh (0: untextured)
+    // Dynamic lighting (the car): the distinct node-space normals and, per vertex, the index of its normal (-1:
+    // colour from a COLOR command); the colours are recomputed into a copy of `v` in the display list at every draw.
+    std::vector<float> normals;
+    std::vector<s16> normalOf;
 };
 
 int g_clampedVertices;
@@ -76,9 +83,6 @@ struct GuModelData {
 };
 
 size_t g_textureBytes, g_meshBytes;
-
-// Longest triangle edge kept by the conversion, in world units (see GuSink::Emit).
-const float G3_GU_MAX_EDGE = 3.0f;
 
 // Swizzles a texture of `bw` bytes per row and h rows (bw multiple of 16, h multiple of 8) into dst.
 void Swizzle(u8 *dst, const u8 *src, int bw, int h)
@@ -242,9 +246,26 @@ struct GuSink : G3ShapeSink {
     u32 color;
     float alpha;
     float u = 0, v = 0;
+    // Lighting (G3SetDrawLight): a NORMAL command computes the vertex colour, as on the DS.
+    const G3DrawLight *light = nullptr;
+    const G3Lit *lit = nullptr;
+    const float *node = nullptr;
+    float cn[3] = {0, 0, 0};
+    bool hasN = false;
     GuSink(u32 dif, float a) : alpha(a)
     {
         Color(dif);
+    }
+    void Normal(float x, float y, float z) override
+    {
+        if (!light || !lit->lit)
+            return;
+        float n[3] = {x, y, z}, w[3];
+        G3WorldNormal(*light, node, n, w);
+        Color(G3LightVertex(*lit, *light->env, w, light->eye, light->specular));
+        for (int i = 0; i < 3; i++)
+            cn[i] = node ? node[i] * x + node[4 + i] * y + node[8 + i] * z : n[i];
+        hasN = true;
     }
     void Begin(int m) override
     {
@@ -286,7 +307,7 @@ struct GuSink : G3ShapeSink {
     // The GE drops a whole triangle when a vertex projects outside its guard band (about +-2048 pixels around the
     // screen centre), which large track triangles near the camera do: the road behind the car vanished on a real
     // PSP (PPSSPP does not reproduce it). Triangles are split along their longest edge until every edge is at most
-    // maxEdge model units.
+    // maxEdge model units (G3Model::guardEdge, 3 for the track).
     float maxEdge = 1e30f;
     static GuVertex Mid(const GuVertex &a, const GuVertex &b)
     {
@@ -296,6 +317,9 @@ struct GuSink : G3ShapeSink {
         m.x = (a.x + b.x) * 0.5f;
         m.y = (a.y + b.y) * 0.5f;
         m.z = (a.z + b.z) * 0.5f;
+        for (int k = 0; k < 3; k++)
+            m.n[k] = (a.n[k] + b.n[k]) * 0.5f;
+        m.hasN = a.hasN && b.hasN;
         u32 c = 0;
         for (int k = 0; k < 32; k += 8)
             c |= ((((a.color >> k) & 255) + ((b.color >> k) & 255) + 1) / 2) << k;
@@ -332,16 +356,24 @@ struct GuSink : G3ShapeSink {
     }
     void Color(u32 c) override
     {
+        color = Color8888(c, alpha);
+        hasN = false; // a COLOR command (or a new normal, which sets it again) replaces the lit colour
+    }
+    static u32 Color8888(u32 c, float alpha)
+    {
         u32 r = (c & 31) * 255 / 31, g = ((c >> 5) & 31) * 255 / 31, b = ((c >> 10) & 31) * 255 / 31;
         u32 a = (u32)(alpha * 255.0f + 0.5f);
-        color = r | g << 8 | b << 16 | a << 24;
+        return r | g << 8 | b << 16 | a << 24;
     }
     void TexCoord(s16 s, s16 t) override
     {
         u = s;
         v = t;
     }
-    void Vertex(const float *p) override { prim.push_back({u, v, color, p[0], p[1], p[2]}); }
+    void Vertex(const float *p) override
+    {
+        prim.push_back({u, v, color, p[0], p[1], p[2], {cn[0], cn[1], cn[2]}, hasN});
+    }
 };
 
 } // namespace
@@ -357,7 +389,8 @@ G3Model::~G3Model()
         }
     if (GuModelData *data = (GuModelData *)backend) {
         for (auto &m : data->meshes) {
-            g_meshBytes -= sizeof(GuVertex16) * m.second.count;
+            g_meshBytes -= sizeof(GuVertex16) * m.second.count + m.second.normals.size() * sizeof(float) +
+                           m.second.normalOf.size() * sizeof(s16);
             free(m.second.v);
         }
         delete data;
@@ -401,7 +434,11 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
     }
     float scale = 1;
     const G3Model *src = nullptr;
-    int mat = -1;
+    int mat = -1, nodeIndex = 0;
+    const float *node = nullptr;
+    const G3DrawLight *light = G3GetDrawLight();
+    (void)node;
+    G3Lit lit;
     bool skip = false;
     const G3Texture *tex = nullptr;
     u32 dif = 0x7fff;
@@ -409,6 +446,8 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
     for (const Op &o : ops) {
         switch (o.kind) {
         case 0:
+            nodeIndex = o.a;
+            node = o.a < (int)nodes.size() ? nodes[o.a].m : nullptr;
             if (!draw)
                 break;
             sceGumPopMatrix();
@@ -446,6 +485,18 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
                 }
                 skip = !back && !front;
                 u32 a = (m.polyAttr >> 16) & 31;
+                if (light) {
+                    lit = G3ResolveMaterial(m, *light->env, light->set);
+                    dif = lit.diffuse;
+                    if (lit.alpha >= 0)
+                        a = (u32)lit.alpha;
+                    if (draw) {
+                        if (light->env->fog && lit.fog)
+                            sceGuEnable(GU_FOG);
+                        else
+                            sceGuDisable(GU_FOG);
+                    }
+                }
                 alpha = a == 0 ? 1.0f : a / 31.0f;
             } else {
                 src = nullptr;
@@ -468,11 +519,21 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
         case 2: {
             if (o.a >= (int)shapes.size() || skip)
                 break;
-            u64 key = (u64)(uintptr_t)src << 32 ^ (u64)(u32)(mat & 0xffff) << 16 ^ (u64)(u32)o.a;
+            // Lit colours depend on the draw's rotation: baked per variant (piece rotation); variant -1 (the car)
+            // is converted at every draw into the display list's memory.
+            bool dynamic = light && light->variant < 0;
+            int variant = light ? light->variant + 1 : 0;
+            u64 key = (u64)(uintptr_t)src << 32 ^ (u64)(u32)(mat & 0xffff) << 16 ^ (u64)(u32)o.a ^
+                      (u64)(u32)(variant & 0xff) << 56 ^ (u64)(u32)(nodeIndex & 0xff) << 48;
             auto it = data->meshes.find(key);
             if (it == data->meshes.end()) {
                 GuSink sink(dif, alpha);
-                sink.maxEdge = G3_GU_MAX_EDGE / scale;
+                sink.maxEdge = guardEdge / scale;
+                if (light) {
+                    sink.light = light;
+                    sink.lit = &lit;
+                    sink.node = node;
+                }
                 G3DecodeShape(shapes[o.a], sink);
                 GuMesh m;
                 m.count = (int)sink.out.size();
@@ -489,16 +550,52 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
                         m.v[k] = {ToS16(a.u), ToS16(a.v), a.color, ToS16(a.x * 4096), ToS16(a.y * 4096),
                                   ToS16(a.z * 4096), 0};
                     }
+                    if (dynamic) {
+                        std::map<std::vector<float>, int> ids;
+                        m.normalOf.resize(m.count);
+                        for (int k = 0; k < m.count; k++) {
+                            const GuVertex &a = sink.out[k];
+                            if (!a.hasN) {
+                                m.normalOf[k] = -1;
+                                continue;
+                            }
+                            std::vector<float> n(a.n, a.n + 3);
+                            auto f = ids.find(n);
+                            if (f == ids.end()) {
+                                f = ids.emplace(n, (int)ids.size()).first;
+                                m.normals.insert(m.normals.end(), a.n, a.n + 3);
+                            }
+                            m.normalOf[k] = (s16)f->second;
+                        }
+                        g_meshBytes += m.normals.size() * sizeof(float) + m.normalOf.size() * sizeof(s16);
+                    }
                     sceKernelDcacheWritebackRange(m.v, bytes);
                     g_meshBytes += bytes;
                 }
                 it = data->meshes.emplace(key, m).first;
             }
             const GuMesh &mesh = it->second;
+            GuVertex16 *drawV = mesh.v;
+            if (dynamic && draw && mesh.count && !mesh.normals.empty()) {
+                // Colours of this draw: the vertices are copied into the display list and relit.
+                GuVertex16 *v = (GuVertex16 *)sceGuGetMemory(sizeof(GuVertex16) * mesh.count);
+                memcpy(v, mesh.v, sizeof(GuVertex16) * mesh.count);
+                size_t nc = mesh.normals.size() / 3;
+                u32 *rgb = (u32 *)alloca(nc * sizeof(u32));
+                for (size_t i = 0; i < nc; i++) {
+                    float w[3];
+                    G3WorldNormal(*light, nullptr, &mesh.normals[i * 3], w);
+                    rgb[i] = GuSink::Color8888(G3LightVertex(lit, *light->env, w, light->eye, light->specular), 0);
+                }
+                for (int k = 0; k < mesh.count; k++)
+                    if (mesh.normalOf[k] >= 0)
+                        v[k].color = rgb[mesh.normalOf[k]] | (v[k].color & 0xff000000);
+                drawV = v;
+            }
             if (mesh.count && draw) {
                 if (mesh.su)
                     sceGuTexScale(mesh.su, mesh.sv);
-                sceGumDrawArray(GU_TRIANGLES, GU_VTYPE, mesh.count, nullptr, mesh.v);
+                sceGumDrawArray(GU_TRIANGLES, GU_VTYPE, mesh.count, nullptr, drawV);
             }
             break;
         }
@@ -521,6 +618,7 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
     if (draw) {
         sceGumPopMatrix();
         sceGuDisable(GU_CULL_FACE);
+        sceGuDisable(GU_FOG);
     }
 }
 

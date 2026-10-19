@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
 #include <map>
 #include <string>
 
@@ -15,6 +16,7 @@
 #include "nitro.h"
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
+#include "track/dsTrackLighting.h"
 
 bool RaceReadFile(const std::string &path, std::vector<u8> *out)
 {
@@ -52,6 +54,98 @@ void RaceMatrix(const MtxFx43 &m, float *g)
             g[r * 4 + c] = m.m[r][c] / 4096.0f;
     g[3] = g[7] = g[11] = 0;
     g[15] = 1;
+}
+
+// @port ov003:0211dc68 partial (light vectors and colours; the colour sets reach the renderer +0xdc / +0xe0)
+// @port main:0204f528 partial (shininess and fog tables only)
+bool RaceBuildLighting(const char *env, const char *timeOfDay, G3LightEnv *out)
+{
+    dsTrackLighting tl;
+    if (!tl.Load(env, timeOfDay))
+        return false;
+    // fx32 0..1 -> 5 bits as the renderer does (_s32_div_f(v, 0x84)).
+    auto rgb = [](const VecFx32 &c) {
+        auto k = [](fx32 v) { return std::min(31, std::max(0, (int)(v / 0x84))); };
+        return (u16)(k(c.x) | k(c.y) << 5 | k(c.z) << 10);
+    };
+    G3LightEnv e;
+    // ov003 0x0211dc68: lights 0 and 1 along (-4095, -5119, 0), lights 2 and 3 along (2048, -6757, 2048),
+    // all white (0x1000 -> 31); the vectors are normalised by the game (dsVec_Normalize).
+    const float d01[3] = {-4095, -5119, 0}, d23[3] = {2048, -6757, 2048};
+    for (int i = 0; i < 4; i++) {
+        const float *d = i < 2 ? d01 : d23;
+        float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        for (int k = 0; k < 3; k++) {
+            e.lights[i].dir[k] = d[k] / l;
+            e.lights[i].color[k] = 1;
+        }
+    }
+    // Renderer +0xdc: set 0 (lights mask 3) = colours 1, 2, 3; set 1 (mask 0xc) = colours 5, 6, 7, as ambient,
+    // diffuse and specular (main 0x02055970); set 0 also turns the shininess table on.
+    e.sets[0] = {3, rgb(tl.colors[1]), rgb(tl.colors[2]), rgb(tl.colors[3]), true};
+    e.sets[1] = {0xc, rgb(tl.colors[5]), rgb(tl.colors[6]), rgb(tl.colors[7]), false};
+    // main 0x0204f528: shininess[i] = (2i + 1)^9 / 256^8 (in 8 bits), the last entry 255.
+    for (int i = 0; i < 127; i++) {
+        u32 v = (u32)(2 * i + 1) & 0xff, x = v, p = 0;
+        for (int n = 0; n < 8; n++) {
+            p = v * x;
+            x = p >> 8;
+        }
+        e.shininess[i] = (u8)(p >> 8);
+    }
+    e.shininess[127] = 255;
+    // Fog: colour 0, G3X_SetFog(on, colour + alpha, shift 1, offset 0x60) with the linear table 0, 4, .. 124 of
+    // main 0x0204f528. The game draws in W-buffer mode (SWAP_BUFFERS = 2), where the fog compares the top 15 bits of
+    // the 24-bit W (1.0 = 0x1000), i.e. 8 per world unit: density 0 at w = 0x60 / 8 = 12 units, rising by
+    // 4/127 every 0x200 / 8 = 64 units (full at 2044 units). Port reading, not checked on hardware; the fog alpha
+    // (the 3D layer fading into the 2D backdrop) is not reproduced.
+    e.fog = true;
+    e.fogColor = rgb(tl.colors[0]);
+    e.fogStart = 0x60 / 8.0f;
+    e.fogEnd = e.fogStart + 127.0f / 4 * 0x200 / 8;
+    *out = e;
+    return true;
+}
+
+static void RotationOf(const MtxFx43 &m, float *rot)
+{
+    float g[16];
+    RaceMatrix(m, g);
+    for (int c = 0; c < 3; c++) {
+        float l = sqrtf(g[c * 4] * g[c * 4] + g[c * 4 + 1] * g[c * 4 + 1] + g[c * 4 + 2] * g[c * 4 + 2]);
+        for (int r = 0; r < 3; r++)
+            rot[c * 3 + r] = l > 0 ? g[c * 4 + r] / l : 0;
+    }
+}
+
+const G3DrawLight *RaceSession::PieceLight(size_t k, G3DrawLight *out) const
+{
+    if (!lighting)
+        return nullptr;
+    *out = G3DrawLight();
+    out->env = &lightEnv;
+    out->set = 0;
+    RotationOf(pieces[k].second->matrix, out->rot);
+    out->variant = pieces[k].second->rotation & 3;
+    return out;
+}
+
+const G3DrawLight *RaceSession::CarLight(G3DrawLight *out) const
+{
+    if (!lighting)
+        return nullptr;
+    *out = G3DrawLight();
+    out->env = &lightEnv;
+    out->set = 1;
+    RotationOf(car->matrix, out->rot);
+    const MtxFx43 &cm = cams[camIndex].matrix;
+    float f[3] = {cm.m[2][0] / 4096.0f, cm.m[2][1] / 4096.0f, cm.m[2][2] / 4096.0f};
+    float l = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    for (int i = 0; i < 3; i++)
+        out->eye[i] = l > 0 ? f[i] / l : 0;
+    out->specular = true;
+    out->variant = -1;
+    return out;
 }
 
 RaceSession::~RaceSession()
@@ -127,10 +221,36 @@ bool RaceSession::Load(const char *trackName)
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
     carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
-    for (auto &pc : pieces)
-        pc.first->Prepare(batch); // once per model: the back-end caches by (material, shape)
-    if (carModel)
+    // Lighting of the track's time of day (the race setup takes it from the track, as the game's menus do).
+    setup->timeOfDay = track.info.timeOfDay;
+    if (!RaceBuildLighting(setup->EnvironmentName(), setup->TimeOfDayName(), &lightEnv))
+        lighting = false;
+    // Sky dome: Sky/<env>/sky_<tod>, scaled (7987, 6349, 7987) / 4096 on Coast (ov003 0x0211de20; Island uses
+    // (10035, 7168, 10035)); drawn around the camera by the drivers.
+    skyModel = own(RaceLoadModel(std::string("Sky/") + setup->EnvironmentName() + "/sky_" + setup->TimeOfDayName()));
+    if (skyModel)
+        skyModel->guardEdge = 150; // 1,370 units away: about 6 degrees
+    if (setup->environment == ENV_ISLAND) {
+        skyScale[0] = skyScale[2] = 10035 / 4096.0f;
+        skyScale[1] = 7168 / 4096.0f;
+    } else {
+        skyScale[0] = skyScale[2] = 7987 / 4096.0f;
+        skyScale[1] = 6349 / 4096.0f;
+    }
+    // Back-end conversion ahead of the race (PSP: vertex arrays with the lit colours of each piece rotation).
+    G3DrawLight dl;
+    for (size_t k = 0; k < pieces.size(); k++) {
+        G3SetDrawLight(PieceLight(k, &dl));
+        pieces[k].first->Prepare(batch);
+    }
+    G3SetDrawLight(nullptr);
+    if (carModel) {
+        G3SetDrawLight(CarLight(&dl)); // lit: geometry and normals cached, colours recomputed at every draw
         carModel->Prepare(nullptr);
+        G3SetDrawLight(nullptr);
+    }
+    if (skyModel)
+        skyModel->Prepare(nullptr);
     printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
            batch ? "ok" : "missing", carModel ? "ok" : "missing");
     return true;

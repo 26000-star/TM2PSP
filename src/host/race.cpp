@@ -75,7 +75,7 @@ static bool SaveBmp(const char *path, int w, int h)
     return true;
 }
 
-static bool topView = false, noCull = false;
+static bool topView = false, noCull = false, unlit = false;
 static int drawnPieces = 0;
 
 static void DrawRace(RaceSession &race, int w, int h)
@@ -89,7 +89,41 @@ static void DrawRace(RaceSession &race, int w, int h)
     const dsChaseCamera &cam = race.cams[race.camIndex];
     float fovy = cam.fov / 4096.0f;
     float n = 0.25f, f = 600, t = n * tanf(fovy * 0.5f * 3.14159265f / 180), r = t * w / h;
+    // Sky first, around the eye, with a far plane beyond its radius (1,370 units on Coast), without depth.
+    if (race.skyModel && race.lighting && !topView) {
+        glFrustum(-r, r, -t, t, n, 4000);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        const MtxFx43 &cm = race.cams[race.camIndex].matrix;
+        float e[3], a[3], u[3];
+        for (int i = 0; i < 3; i++) {
+            e[i] = cm.m[3][i] / 4096.0f;
+            a[i] = e[i] + cm.m[2][i] / 4096.0f;
+            u[i] = cm.m[1][i] / 4096.0f;
+        }
+        LookAt(e, a, u);
+        glTranslatef(e[0], e[1], e[2]);
+        glScalef(race.skyScale[0], race.skyScale[1], race.skyScale[2]);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        G3SetDrawLight(nullptr);
+        race.skyModel->Draw(nullptr);
+        glDepthMask(GL_TRUE);
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+    }
     glFrustum(-r, r, -t, t, n, f);
+    if (race.lighting && race.lightEnv.fog) {
+        u16 fc = race.lightEnv.fogColor;
+        float col[4] = {(fc & 31) / 31.0f, ((fc >> 5) & 31) / 31.0f, ((fc >> 10) & 31) / 31.0f, 1};
+        glFogi(GL_FOG_MODE, GL_LINEAR);
+        glFogf(GL_FOG_START, race.lightEnv.fogStart);
+        glFogf(GL_FOG_END, race.lightEnv.fogEnd);
+        glFogfv(GL_FOG_COLOR, col);
+    }
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     const MtxFx43 &cm = cam.matrix;
@@ -141,6 +175,8 @@ static void DrawRace(RaceSession &race, int w, int h)
         RaceMatrix(pc.second->matrix, g);
         glPushMatrix();
         glMultMatrixf(g);
+        G3DrawLight dl;
+        G3SetDrawLight(race.PieceLight(k, &dl));
         pc.first->Draw(race.batch);
         glPopMatrix();
     }
@@ -148,9 +184,12 @@ static void DrawRace(RaceSession &race, int w, int h)
         RaceMatrix(race.car->matrix, g);
         glPushMatrix();
         glMultMatrixf(g);
+        G3DrawLight dl;
+        G3SetDrawLight(race.CarLight(&dl));
         race.carModel->Draw(nullptr);
         glPopMatrix();
     }
+    G3SetDrawLight(nullptr);
 }
 
 // HUD stand-in text: 5 x 7 glyphs as GL quads, with a shadow.
@@ -252,6 +291,8 @@ int main(int argc, char **argv)
             shot = argv[++i];
         else if (!strcmp(argv[i], "--no-cull")) // draw every piece (culling check)
             noCull = true;
+        else if (!strcmp(argv[i], "--unlit")) // material colours, no DS lighting, fog or sky (as before phase 5)
+            unlit = true;
         else if (!strcmp(argv[i], "--top"))
             topView = true;
         else if (!strcmp(argv[i], "--finish-at") && i + 1 < argc) // save-file test: a finish at that frame
@@ -299,6 +340,7 @@ int main(int argc, char **argv)
     }
     RaceApp app(savePath, "ENTREE", "ECHAP");
     app.menus = frames < 0;
+    app.lighting = !unlit;
     bool menuShot = screen && !strcmp(screen, "menu"); // --frames N --screen menu: the track list
     if (trackName || (frames >= 0 && !menuShot)) {
         int index = app.FindTrack(trackName ? trackName : "easy/0");

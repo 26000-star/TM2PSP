@@ -45,6 +45,7 @@ public:
     int selected = 0;     // cursor on the track list
     int item = 0;         // cursor in the pause / result menu
     bool menus = true;    // false: no result menu (auto tests)
+    bool lighting = true; // false: sessions draw unlit (tm_race --unlit)
 
 private:
     void LoadSave();

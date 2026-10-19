@@ -641,3 +641,40 @@ frame times need the R overlay or the frame-time log on the PSP-3000.**
 - Results (PPSSPP, hard/0, 600 frames, auto drive): car and camera **identical to the host**; GE list build
   3.1 -> 1.9 ms per frame, update unchanged (4.3 ms), heap 4.4 -> 2.6 MB. The image differs from the previous one by
   at most 4 levels (exact palette colours) plus 405 edge pixels (16-bit positions). Reload test: still constant.
+
+### Step 3a: DS lighting, fog and sky (done)
+
+Found in the code (names in `config/names/phase5_render.txt`):
+
+- `Scripts/config/tracks` colours (`dsTrackLighting`, ov003 0x0211c5d4) live in the race environment object
+  (`*0x027e0e58`, 0xec bytes, constructor ov003 0x0211e50c, created by the race loader main 0x02099e6c) as eight
+  RGBA vectors at +0x04 + 16k. `dsRaceEnv_SetupLights` (ov003 0x0211dc68) gives them to the renderer singleton
+  (`*0x020c8dcc`, vtable 0x020bc468): lights 0 and 1 along (-4095, -5119, 0), lights 2 and 3 along
+  (2048, -6757, 2048), all white (`+0x28`, itcm 0x01ff90dc); **colour set 0 = colours 1, 2, 3 with light mask 3,
+  set 1 = colours 5, 6, 7 with mask 0xc** (`+0xdc`, main 0x0204ca64, renderer +0x7b8/+0x7f8/+0x838); **colour 0 =
+  fog colour** (`+0xe0`, main 0x0204c964: FOG_COLOR, fog on, shift 1, offset 0x60). Colour 4 is not used there.
+- At model load, main 0x02055970 rewrites each material: track models (flag +0x70) take set 0 as ambient /
+  diffuse / specular with the shininess table on, the car (+0x71) set 1 on lights 2 and 3; emission stays the
+  material's; "underside" materials become dark grey, "lights"/"light" translucent (alpha 4), "sky0" materials
+  have no fog. Track pieces and the car carry normals and no vertex colours: **they are lit by the hardware**, which
+  the port drew flat until now.
+- Renderer init (main 0x0204f528): shininess table `(2i+1)^9 / 256^8`, fog table 0, 4, ... 124 over 32 entries,
+  `SWAP_BUFFERS = 2` (W-buffering); every frame (itcm 0x01ff9628) `G3X_SetFog(on, mode 0, 1, 0x60)`.
+- The sky is a model, `Sky/<env>/sky_<rise|day|set>` (ov003 0x0211de20), scaled (7987, 6349, 7987) / 4096 on Coast;
+  the same function creates `Misc/CoastSea/CoastSea` (the animated sea, not ported yet).
+
+Port (common code, identical on both back-ends): `G3LightEnv` / `G3ResolveMaterial` / `G3LightVertex`
+(`g3d_model.*`) implement the DS equation (GBATEK: emission + sum of light x (specular x shininess + diffuse x
+max(0, -L.N) + ambient), 5-bit channels clamped to 31); `RaceBuildLighting` builds it from the track's time of day;
+`RaceSession::PieceLight` / `CarLight` select it per draw. The PSP bakes the lit colours of each piece rotation into
+its vertex arrays at load, and keeps the car's geometry with its distinct normals, relighting them every frame into
+the display list (0.65 ms in PPSSPP, against 4.7 ms for a full reconversion). The sky is drawn first around the eye
+(own far plane, no depth); the PSP splits it to 150-unit edges instead of 3 (`G3Model::guardEdge`). Fog: linear in
+view depth from 12 to 2,044 units, from the W-buffer reading (15-bit fog depth = W x 8) — a port reading, not checked
+on hardware; the fog alpha of mode 0 (far geometry fading into the 2D backdrop) is not reproduced. Track specular is
+left out (its shininess table stays 0 below index 72, i.e. it only shows when the light, the surface and the line of
+sight line up); the car's specular is computed. `tm_race --unlit` draws the previous way.
+
+Checks: host and PSP images show the same lit scene (`docs/host_race.png`, `docs/psp_race.png`); car and camera
+still identical to the host (easy/0 150 frames, hard/0 600 frames); `check_culling.py` 0 differences; reload test
+constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit colours), easy/0 3.1 -> 3.8 ms.

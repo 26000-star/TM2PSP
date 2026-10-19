@@ -69,6 +69,8 @@ public:
     struct Material {
         int texture = -1;          // index in m_textures
         u32 difAmb = 0x7fff7fff, polyAttr = 0x1f00c0;
+        u32 specEmi = 0;           // SPE_EMI: specular (bits 0-14), shininess table (15), emission (16-30)
+        std::string name;
         int w = 0, h = 0;
         u32 texParam = 0;          // TEXIMAGE_PARAM bits 16..19: repeat S/T, flip S/T
     };
@@ -81,6 +83,9 @@ public:
     std::vector<Op> ops;
     float upScale = 1, downScale = 1;
     bool batchMaterials = false;
+    // PSP back-end: longest triangle edge kept, in model units after the scale ops (the GE drops triangles that
+    // leave its guard band; 3 suits the track near the camera, the far sky dome needs much less splitting).
+    float guardEdge = 3.0f;
     G3TexSet texSet;               // TEX0 of this container (kept for material.bin)
     mutable void *backend = nullptr; // back-end data (PSP: converted shapes)
 
@@ -100,3 +105,53 @@ struct G3ShapeSink {
     virtual void Vertex(const float *pos) = 0;
 };
 void G3DecodeShape(const std::vector<u8> &dl, G3ShapeSink &sink);
+
+// ---- DS lighting: the geometry engine's lighting equation (GBATEK) with the race renderer's settings ----
+// The game sets four directional lights and two colour sets (ov003 0x0211dc68 from Scripts/config/tracks), and
+// at model load overrides the materials (main 0x02055970): track models take set 0 (lights 0 and 1), the car
+// set 1 (lights 2 and 3). Colours are RGB555 as on the DS.
+struct G3LightEnv {
+    struct Light {
+        float dir[3] = {0, -1, 0}; // world-space unit vector (the direction the light travels)
+        float color[3] = {1, 1, 1}; // 0..1 (5-bit / 31)
+    };
+    struct Set {
+        u8 mask = 0;               // lights used (POLYGON_ATTR bits 0-3)
+        u16 ambient = 0, diffuse = 0, specular = 0;
+        bool table = false;        // specular through the shininess table (SPE_EMI bit 15)
+    };
+    Light lights[4];
+    Set sets[2];
+    u8 shininess[128] = {};
+    bool fog = false;              // linear fog in view depth: density 0 at fogStart .. 1 at fogEnd
+    u16 fogColor = 0;
+    float fogStart = 0, fogEnd = 1;
+};
+
+// A material after the game's override rules (main 0x02055970).
+struct G3Lit {
+    bool lit = false;              // vertex colours come from the normals
+    u8 mask = 0;
+    u16 ambient = 0, diffuse = 0x7fff, specular = 0, emission = 0;
+    bool table = false;
+    bool fog = true;               // POLYGON_ATTR bit 15 (all but the "sky0" materials)
+    int alpha = -1;                // replaced polygon alpha (0..31), -1 = the material's
+};
+G3Lit G3ResolveMaterial(const G3Model::Material &m, const G3LightEnv &env, int set);
+// RGB555 vertex colour for the unit world-space normal n. eye: the camera's forward vector (the DS line of sight
+// (0, 0, -1) in view space), used by the specular term.
+u16 G3LightVertex(const G3Lit &l, const G3LightEnv &env, const float *n, const float *eye, bool specular);
+
+// Lighting of the next draws (G3SetDrawLight(nullptr): unlit, material colours as before).
+struct G3DrawLight {
+    const G3LightEnv *env = nullptr;
+    int set = 0;                   // 0: track pieces, 1: car
+    float rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1}; // model -> world rotation, column-major
+    float eye[3] = {0, 0, -1};
+    bool specular = false;
+    int variant = 0;               // PSP: vertex colours are baked per variant (piece rotation); -1 = every draw
+};
+void G3SetDrawLight(const G3DrawLight *l);
+const G3DrawLight *G3GetDrawLight();
+// World normal of a model-space normal under a node matrix (column-major 4x4, null = identity), normalised.
+void G3WorldNormal(const G3DrawLight &l, const float *node, const float *n, float *out);

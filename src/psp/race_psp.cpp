@@ -190,17 +190,43 @@ void DrawRace(RaceSession &race)
     sceGumLoadIdentity();
     // FOV (config/cameras, 70) as the full vertical angle, as on the host; near plane 0.5 (host 0.25) for the
     // 16-bit depth buffer.
-    sceGumPerspective(cam.fov / 4096.0f, (float)SCR_W / SCR_H, 0.5f, 600.0f);
-    sceGumMatrixMode(GU_VIEW);
-    sceGumLoadIdentity();
     const MtxFx43 &cm = cam.matrix;
     ScePspFVector3 eye, at, up;
     eye = {cm.m[3][0] / 4096.0f, cm.m[3][1] / 4096.0f, cm.m[3][2] / 4096.0f};
     at = {eye.x + cm.m[2][0] / 4096.0f, eye.y + cm.m[2][1] / 4096.0f, eye.z + cm.m[2][2] / 4096.0f};
     up = {cm.m[1][0] / 4096.0f, cm.m[1][1] / 4096.0f, cm.m[1][2] / 4096.0f};
+    // Sky first, around the eye, with a far plane beyond its radius (1,370 units on Coast), without depth.
+    if (race.skyModel && race.lighting) {
+        sceGumPerspective(cam.fov / 4096.0f, (float)SCR_W / SCR_H, 0.5f, 4000.0f);
+        sceGumMatrixMode(GU_VIEW);
+        sceGumLoadIdentity();
+        sceGumLookAt(&eye, &at, &up);
+        sceGumMatrixMode(GU_MODEL);
+        sceGumLoadIdentity();
+        sceGumTranslate(&eye);
+        ScePspFVector3 sc = {race.skyScale[0], race.skyScale[1], race.skyScale[2]};
+        sceGumScale(&sc);
+        sceGuDisable(GU_DEPTH_TEST);
+        sceGuDepthMask(GU_TRUE);
+        G3SetDrawLight(nullptr);
+        race.skyModel->Draw(nullptr);
+        sceGuDepthMask(GU_FALSE);
+        sceGuEnable(GU_DEPTH_TEST);
+        sceGumMatrixMode(GU_PROJECTION);
+        sceGumLoadIdentity();
+    }
+    sceGumPerspective(cam.fov / 4096.0f, (float)SCR_W / SCR_H, 0.5f, 600.0f);
+    sceGumMatrixMode(GU_VIEW);
+    sceGumLoadIdentity();
     sceGumLookAt(&eye, &at, &up);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
+    if (race.lighting && race.lightEnv.fog) {
+        u16 fc = race.lightEnv.fogColor;
+        u32 col = 0xff000000 | ((fc >> 10) & 31) * 255 / 31 << 16 | ((fc >> 5) & 31) * 255 / 31 << 8 |
+                  (fc & 31) * 255 / 31;
+        sceGuFog(race.lightEnv.fogStart, race.lightEnv.fogEnd, col);
+    }
     DrawSea(eye.x, eye.z);
     float g[16];
     race.Cull((float)SCR_W / SCR_H, 0.5f, 600.0f);
@@ -213,6 +239,8 @@ void DrawRace(RaceSession &race)
         RaceMatrix(pc.second->matrix, g);
         sceGumPushMatrix();
         sceGumMultMatrix((const ScePspFMatrix4 *)g);
+        G3DrawLight dl;
+        G3SetDrawLight(race.PieceLight(k, &dl));
         pc.first->Draw(race.batch);
         sceGumPopMatrix();
     }
@@ -220,9 +248,12 @@ void DrawRace(RaceSession &race)
         RaceMatrix(race.car->matrix, g);
         sceGumPushMatrix();
         sceGumMultMatrix((const ScePspFMatrix4 *)g);
+        G3DrawLight dl;
+        G3SetDrawLight(race.CarLight(&dl));
         race.carModel->Draw(nullptr);
         sceGumPopMatrix();
     }
+    G3SetDrawLight(nullptr);
 }
 
 // Flat rectangle (menu panels), alpha blended.

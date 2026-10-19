@@ -45,6 +45,10 @@ static float curAlpha = 1;
 // Display-list primitives replayed as GL immediate-mode primitives.
 struct GlSink : G3ShapeSink {
     float tw, th;
+    // Lighting (G3SetDrawLight): a NORMAL command computes the vertex colour, as on the DS.
+    const G3DrawLight *light = nullptr;
+    const G3Lit *lit = nullptr;
+    const float *node = nullptr;
     explicit GlSink(const G3Texture *t)
         : tw(t && t->w ? 1.0f / (16.0f * t->w) : 0), th(t && t->h ? 1.0f / (16.0f * t->h) : 0) {}
     void Begin(int mode) override
@@ -57,7 +61,14 @@ struct GlSink : G3ShapeSink {
     {
         glColor4f((c & 31) / 31.0f, ((c >> 5) & 31) / 31.0f, ((c >> 10) & 31) / 31.0f, curAlpha);
     }
-    void Normal(float x, float y, float z) override { glNormal3f(x, y, z); }
+    void Normal(float x, float y, float z) override
+    {
+        if (!light || !lit->lit)
+            return;
+        float n[3] = {x, y, z}, w[3];
+        G3WorldNormal(*light, node, n, w);
+        Color(G3LightVertex(*lit, *light->env, w, light->eye, light->specular));
+    }
     void TexCoord(s16 s, s16 t) override { glTexCoord2f(s * tw, t * th); }
     void Vertex(const float *p) override { glVertex3f(p[0], p[1], p[2]); }
 };
@@ -82,11 +93,15 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
     const G3Texture *tex = nullptr;
     u32 dif = 0x7fff;
     float alpha = 1;
+    const G3DrawLight *light = G3GetDrawLight();
+    G3Lit lit;
+    const float *node = nullptr;
     for (const Op &o : ops) {
         switch (o.kind) {
         case 0:
             glPopMatrix();
             glPushMatrix();
+            node = o.a < (int)nodes.size() ? nodes[o.a].m : nullptr;
             if (o.a < (int)nodes.size())
                 glMultMatrixf(nodes[o.a].m);
             if (scale != 1)
@@ -112,6 +127,16 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
                         glCullFace(front ? GL_BACK : back ? GL_FRONT : GL_FRONT_AND_BACK);
                     }
                     u32 a = (m.polyAttr >> 16) & 31;
+                    if (light) {
+                        lit = G3ResolveMaterial(m, *light->env, light->set);
+                        dif = lit.diffuse;
+                        if (lit.alpha >= 0)
+                            a = (u32)lit.alpha;
+                        if (light->env->fog && lit.fog)
+                            glEnable(GL_FOG);
+                        else
+                            glDisable(GL_FOG);
+                    }
                     alpha = a == 0 ? 1.0f : a / 31.0f;
                 }
             }
@@ -127,6 +152,11 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
         case 2:
             if (o.a < (int)shapes.size()) {
                 GlSink sink(tex);
+                if (light) {
+                    sink.light = light;
+                    sink.lit = &lit;
+                    sink.node = node;
+                }
                 G3DecodeShape(shapes[o.a], sink);
             }
             break;
@@ -143,4 +173,5 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
     }
     glPopMatrix();
     glDisable(GL_CULL_FACE);
+    glDisable(GL_FOG);
 }

@@ -271,7 +271,9 @@ bool G3Model::Load(const std::vector<u8> &d)
             size_t p = mo + R32(d, md.data[i]);
             Material m;
             m.difAmb = R32(d, p + 4);
+            m.specEmi = R32(d, p + 8);
             m.polyAttr = R32(d, p + 12);
+            m.name = md.names[i];
             m.w = R16(d, p + 0x2c);
             m.h = R16(d, p + 0x2e);
             materials.push_back(m);
@@ -367,6 +369,7 @@ bool G3Model::LoadMaterialBin(const std::vector<u8> &d)
     for (u32 i = 0; i < count; i++) {
         Material m;
         m.difAmb = R32(d, p + 4);
+        m.specEmi = R32(d, p + 8);
         m.polyAttr = R32(d, p + 12);
         m.texParam = R32(d, p + 20);
         m.w = R16(d, p + 0x24);
@@ -377,6 +380,7 @@ bool G3Model::LoadMaterialBin(const std::vector<u8> &d)
             memcpy(n, &d[names + i * 48 + k * 16], 16);
             return std::string(n);
         };
+        m.name = name(0);
         int ti = texSet.FindTex(name(1)), pi = texSet.FindPal(name(2));
         if (ti >= 0) {
             G3Texture t = texSet.Decode(ti, pi);
@@ -561,4 +565,91 @@ void G3Model::ComputeBounds()
         r2 = std::max(r2, dx * dx + dy * dy + dz * dz);
     }
     radius = sqrtf(r2);
+}
+
+// ---- DS lighting ----
+
+// main 0x02055970 (the colour part): set 0 for track models (renderer flag +0x70), set 1 for the car (+0x71).
+// @port main:02055970 partial (colours, light masks, alpha and fog; polygon IDs and the shadow-volume modes of the
+// "shadowback" / "shadowfront" materials are left out)
+G3Lit G3ResolveMaterial(const G3Model::Material &m, const G3LightEnv &env, int set)
+{
+    const G3LightEnv::Set &s = env.sets[set & 1];
+    G3Lit r;
+    r.emission = (u16)((m.specEmi >> 16) & 0x7fff);
+    r.ambient = s.ambient;
+    r.diffuse = s.diffuse;
+    r.specular = s.specular;
+    r.table = s.table;
+    const std::string &n = m.name;
+    r.fog = n.compare(0, 4, "sky0") && n.compare(0, 4, "Sky0") && n.compare(0, 4, "SKY0");
+    if (set == 0) {
+        // Lit materials use the set's lights; "underside" is dark grey, "lights" / "light" translucent (alpha 4).
+        r.lit = (m.polyAttr & 15) != 0;
+        r.mask = s.mask;
+        if (n == "underside") {
+            r.ambient = r.diffuse = 0x0842;
+            r.specular = 0;
+        } else if (n == "lights" || n == "light") {
+            r.alpha = 4;
+        }
+    } else {
+        // The car: every material on lights 2 and 3; "snowsnow" has no specular.
+        r.lit = true;
+        r.mask = s.mask;
+        if (n == "snowsnow" || n == "SnowSnow")
+            r.specular = 0;
+    }
+    return r;
+}
+
+// GBATEK: colour = emission + sum over the enabled lights of light x (specular x shininess + diffuse x
+// max(0, -L.N) + ambient), each channel clamped to 31; shininess = max(0, -H.N)^2 with H = (L + line of sight) / 2,
+// through the shininess table when enabled.
+u16 G3LightVertex(const G3Lit &l, const G3LightEnv &env, const float *n, const float *eye, bool specular)
+{
+    auto ch = [](u16 c, int k) { return (float)((c >> (5 * k)) & 31); };
+    float out[3];
+    for (int k = 0; k < 3; k++)
+        out[k] = ch(l.emission, k);
+    for (int i = 0; i < 4; i++) {
+        if (!((l.mask >> i) & 1))
+            continue;
+        const G3LightEnv::Light &L = env.lights[i];
+        float dl = -(L.dir[0] * n[0] + L.dir[1] * n[1] + L.dir[2] * n[2]);
+        if (dl < 0)
+            dl = 0;
+        float sl = 0;
+        if (specular && l.specular) {
+            float h[3] = {(L.dir[0] + eye[0]) * 0.5f, (L.dir[1] + eye[1]) * 0.5f, (L.dir[2] + eye[2]) * 0.5f};
+            sl = -(h[0] * n[0] + h[1] * n[1] + h[2] * n[2]);
+            sl = sl < 0 ? 0 : sl > 1 ? 1 : sl;
+            sl *= sl;
+            if (l.table)
+                sl = env.shininess[std::min(127, (int)(sl * 128))] / 255.0f;
+        }
+        for (int k = 0; k < 3; k++)
+            out[k] += L.color[k] * (ch(l.specular, k) * sl + ch(l.diffuse, k) * dl + ch(l.ambient, k));
+    }
+    u16 c = 0;
+    for (int k = 0; k < 3; k++)
+        c |= (u16)(std::min(31, (int)out[k]) << (5 * k));
+    return c;
+}
+
+static const G3DrawLight *g_drawLight;
+void G3SetDrawLight(const G3DrawLight *l) { g_drawLight = l; }
+const G3DrawLight *G3GetDrawLight() { return g_drawLight; }
+
+void G3WorldNormal(const G3DrawLight &l, const float *node, const float *n, float *out)
+{
+    float m[3];
+    for (int i = 0; i < 3; i++)
+        m[i] = node ? node[i] * n[0] + node[4 + i] * n[1] + node[8 + i] * n[2] : n[i];
+    for (int i = 0; i < 3; i++)
+        out[i] = l.rot[i] * m[0] + l.rot[3 + i] * m[1] + l.rot[6 + i] * m[2];
+    float len = sqrtf(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
+    if (len > 0)
+        for (int i = 0; i < 3; i++)
+            out[i] /= len;
 }

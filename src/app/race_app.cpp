@@ -120,6 +120,7 @@ bool RaceApp::Start(int index)
         screen = TRACKS;
         return false;
     }
+    race->lighting = race->lighting && lighting;
     track = selected = index;
     screen = PLAYING;
     m_finishFrames = -1;

@@ -1,0 +1,17 @@
+# Names recovered in phase 5 (race renderer: lighting, fog, sky).
+# Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- race environment object (*0x027e0e58, 0xec bytes: lighting colours at +0x04.., sky node +0x00, sea +0x88) ----
+ov003:0211e50c dsRaceEnv_ctor
+ov003:0211e450 dsRaceEnv_dtor
+ov003:0211dc68 dsRaceEnv_SetupLights
+ov003:0211de20 dsRaceEnv_LoadSky
+
+# ---- renderer singleton (*0x020c8dcc, vtable 0x020bc468) ----
+0204f528 dsRenderer_Init
+0204ca64 dsRenderer_SetLightingSet
+0204c9c4 dsRenderer_GetLightingSet
+0204c964 dsRenderer_SetFog
+01ff90dc dsRenderer_SetLight
+01ff9628 dsRenderer_Frame
+02055970 dsModel_ApplyLightingSets
