@@ -152,8 +152,8 @@ In short:
   the gears, brakes and reverses (`tm_physics --drop` + `tools/host/check_drop.py`).
 - **Host race window** (`tm_race`, SDL2 + OpenGL): the Coast car drives on a Coast track with the game's own models
   and textures, the terrain, and the race rules: countdown, checkpoints, laps, finish and respawn
-  (`tm_trackdump --triggers` + `check_triggers.py`, `tm_physics --progress` + `check_progress.py`; the game's
-  cameras and HUD are still to port).
+  (`tm_trackdump --triggers` + `check_triggers.py`, `tm_physics --progress` + `check_progress.py`), seen from the
+  game's chase camera (`config/cameras`, `check_cameras.py` + `check_camera.py`); the HUD is still to port.
   ![tm_race on coa/easy/0](docs/host_race.png)
 
 ```bash

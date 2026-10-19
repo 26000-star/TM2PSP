@@ -7,6 +7,7 @@
 //            (tools/host/check_engine.py).
 // --drop     Coast car dropped on the start platform, throttle then brake (tools/host/check_drop.py).
 // --progress race progress scenario: countdown, gates, checkpoints, laps, respawn (tools/host/check_progress.py).
+// --camera   chase camera behind the car: standing, accelerating, braking, reversing (tools/host/check_camera.py).
 #include <stdio.h>
 #include <string.h>
 
@@ -25,6 +26,7 @@
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
 #include "track/dsTrack.h"
+#include "race/dsChaseCamera.h"
 #include "race/dsRaceProgress.h"
 
 static int ShapeIndex(const dsTrack &t, const dsCollisionShape *s)
@@ -333,10 +335,61 @@ static int Progress(dsTrack &t, const char *carName)
     return 0;
 }
 
+// Chase camera behind the Coast car of a race: countdown (standing), 90 frames of throttle, then the brake held
+// until the car has reversed faster than 2 m/s for 40 frames; one camera update per frame of two ticks. tools/host/check_camera.py.
+static int Camera(dsTrack &t, const char *carName)
+{
+    dsCarParamsTable table;
+    table.Load();
+    if (table.All().find(carName) == table.All().end())
+        return 1;
+    const dsCarParams &prm = table.Get(carName);
+    static dsCarModelGeometry geo;
+    if (!geo.Load(carName, 0, prm))
+        return 1;
+    t.BuildTerrain();
+    for (dsTrackPiece *pc : t.pieces)
+        pc->CreateCollision();
+    dsCarDynamics car(carName, &geo);
+    car.LoadParams(prm);
+    car.pieceRotationAt = [&t](const VecFx32 &p) { return t.PieceRotationAt(p); };
+    g_dsFrameTime = 0x44;
+    dsRaceProgress rp(&t, &car);
+    rp.Reset(true);
+    dsChaseCamera cam(1);
+    if (!cam.Load("coa"))
+        return 1;
+    cam.Reset();
+    printf("camera Height=%d Distance=%d LookAtHeight=%d DistInc=%d DistDec=%d\n", cam.height, cam.distance,
+           cam.lookAtHeight, cam.distInc, cam.distDec);
+    int phase = 0, go = -1, reversing = 0;
+    for (int f = 0; f < 600 && reversing < 40; f++) {
+        dsCarInput in;
+        if (rp.started && go < 0)
+            go = f;
+        if (go >= 0 && f < go + 90)
+            in.accel = FX32_ONE;
+        else if (go >= 0)
+            in.brake = FX32_ONE;
+        rp.Frame(in, 2);
+        cam.Update(car);
+        phase = !rp.started ? 0 : (f < go + 90 ? 1 : 2);
+        if (phase == 2 && car.forwardSpeed < -2 * FX32_ONE)
+            reversing++;
+        const MtxFx43 &m = car.prevMatrix, &c = cam.matrix;
+        printf("frame %d phase=%d fwdspeed=%d car=%d,%d,%d fwd=%d,%d,%d up=%d,%d,%d cam=%d,%d,%d r=%d,%d,%d"
+               " u=%d,%d,%d f=%d,%d,%d rev=%d spring=%d\n", f, phase, car.forwardSpeed, m.m[3][0], m.m[3][1],
+               m.m[3][2], m.m[2][0], m.m[2][1], m.m[2][2], m.m[1][0], m.m[1][1], m.m[1][2], c.m[3][0], c.m[3][1],
+               c.m[3][2], c.m[0][0], c.m[0][1], c.m[0][2], c.m[1][0], c.m[1][1], c.m[1][2], c.m[2][0], c.m[2][1],
+               c.m[2][2], cam.reverse, cam.distSpring.pos);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *track = "easy/0";
-    bool raw = false, raycast = false, engine = false, drop = false, progress = false;
+    bool raw = false, raycast = false, engine = false, drop = false, progress = false, camera = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -352,6 +405,8 @@ int main(int argc, char **argv)
             drop = true;
         else if (!strcmp(argv[i], "--progress"))
             progress = true;
+        else if (!strcmp(argv[i], "--camera"))
+            camera = true;
         else {
             fprintf(stderr, "usage: tm_physics --root <dir> [--raw] [--track easy/0] --raycast\n");
             return 2;
@@ -379,5 +434,7 @@ int main(int argc, char **argv)
         return Drop(t, "coa");
     if (progress)
         return Progress(t, "coa");
+    if (camera)
+        return Camera(t, "coa");
     return 0;
 }

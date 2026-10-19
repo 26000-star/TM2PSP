@@ -323,7 +323,8 @@ path (piece budget, replacing earlier terrain pieces) is not ported. Grid lookup
 `tm_race --root extract/files [--track easy/0]` opens an SDL2 window (768 x 576) and runs the ported code at 30 Hz
 (two 1/60 s ticks per frame): track scene and piece placement, collision world, car parameters, engine, the full
 car step and the race progress, driven from the keyboard (arrows; Backspace = last checkpoint, Enter = restart). `--frames N --shot out.bmp [--auto]` renders N steps off-screen and saves the
-last frame, which is how the renderer was checked (see `docs/host_race.png`: easy/0 after 4 s at full throttle).
+last frame, which is how the renderer was checked (see `docs/host_race.png`: easy/0, 2 s after "go" at full
+throttle, from the game's Chase1 camera).
 
 - **SDL2** 2.30.12 is built as a static library from the official source release, whose GPG signature was checked
   against Sam Lantinga's key (fingerprint 1528 635D 8053 A57F 77D1 E086 30A5 9377 A776 3BE6), into
@@ -341,8 +342,8 @@ last frame, which is how the renderer was checked (see `docs/host_race.png`: eas
   is ported. 0x020fbe48 only stores these matrices in the car model (0xa8 bytes per wheel, matrices at +0xc and
   +0x3c); the drawing code that uses them is not found yet, and lod0's shapes do not match the lod1 scale
   (body 2.6 high at up_scale 2), so tm_race does not draw wheels yet.
-- Not ported yet (stand-ins in tm_race): main loop (`main()` 0x02003000) and the game state machine, cameras
-  (`config/cameras`, a fixed chase view here), DS lighting/fog/toon (flat GL colours), sky and sea (a flat quad at
+- Not ported yet (stand-ins in tm_race): main loop (`main()` 0x02003000) and the game state machine, the camera
+  manager (start/finish/replay cameras), DS lighting/fog/toon (flat GL colours), sky and sea (a flat quad at
   2.5), wheels, HUD, sound. tm_race builds the terrain before the collision world.
 
 ## Race progress: triggers, checkpoints, laps, finish, respawn
@@ -389,9 +390,43 @@ finish, a car left under the sea): **26 tracks, 0 errors**.
 - Not ported: HUD drawing (lights, clock, split times 0x0210e9fc, messages), sounds, ghosts/replays, the pause
   button, network modes, medals/records. The trigger list's per-camera update (vtable +0x1c) is visual only.
 
+## Chase camera (config/cameras)
+
+`src/game/race/dsChaseCamera.*` ports the race chase camera (vtable 0x020c00b8, constructor main 0x0208fe10):
+`tm_cfgdump --cameras` + `tools/host/check_cameras.py` (fields from unluac, spring table from the ROM): **8 cameras,
+238 damping lookups, 0 errors**; `tm_physics --camera` + `tools/host/check_camera.py` (Coast Chase1 behind the real
+car: countdown, full throttle, braking into reverse): **0 errors** on easy/0, practice/0, medium/2, hard/0,
+extreme/0. tm_race draws through it (C switches Chase1/Chase2; restart and respawn reset it).
+
+- **Loader** (0x0208fa18): `cameras[<env>]`, keys `Chase<kind>` + Height (+0x6c), Distance (+0x74), LookAtHeight
+  (+0x78), TiltTightness (+0x7c), FOV (+0x2c, degrees; 70 everywhere), DirTightness (+0x9c), DistInc/DistDec
+  (+0xa0/+0xa4), RollMode (+0xdc, integer: 2 on Coast Chase1, 1 on Chase2) and DistTightness (stiffness of the
+  distance spring +0xa8). The Bumper* keys belong to another camera.
+- **Spring** (0x020abb68/0x020abb78/0x020abc38): `vel += ((target - pos) k - vel d) dt`, `pos += vel dt`, with the
+  damping d looked up in a table of 30 (stiffness, damping) pairs (0x020c1d08, about 2 sqrt(k)), extended linearly
+  below the first pair and from the middle pair above the last one (0x020abc68).
+- **Update** (0x0208e694, once per frame, tick time dt = 1/60 even when a frame is two ticks): the distance is
+  Distance + spring x DistInc (target 1 while the car accelerates along its forward axis by more than 0.5 with the
+  throttle on, or flies or boosts) or x DistDec (-1 when braking); a reverse blend goes to +1 (2/s) when the car
+  moves backwards faster than 0.3, which swings the camera round the car through a smoothstep, on the side it is
+  already on. The desired point (Height + 2 x smoothstep of the airborne blend above the car) is followed with
+  DirTightness x dt (raised to 6 in the air while boosting). The up vector follows the car's up (RollMode 1: the
+  ground-projected right axis crossed with forward) with TiltTightness x dt, blends back to the world up while the
+  car is upside down, and is rolled by the 20-frame average of the ground normal's change along the car (pitch
+  bumps, clamped at -0.3 rad). The final position keeps the distance in the plane across that up, Height above the
+  car, at least 0.5 above the sea when the car is under it; the camera looks at the car + LookAtHeight x up
+  (RollMode 0/1 re-derive the up from the look direction; 0 also levels it), frame built by itcm 0x01ffabfc.
+- The car side comes from the player: display matrix (dynamics +0x1f0, copied to the car entity +0x58 by
+  0x0210e278), velocity +0x378, acceleration +0x514, throttle +0x468, turbo timer +0x4ec, ground normal +0x220, and
+  "airborne" = player vtable +0x2c (0x0210eac8 -> 0x021226f8: no wheel down and no body hit with a normal above
+  0.8).
+- Assumptions: RollMode 0 divides |up.y| by 0.1 (operands not visible in the decompilation); tm_race takes FOV as
+  the full vertical angle. The base camera's fade and FOV ramp (0x0208e524) and the camera manager that picks and
+  blends cameras (ov003 0x020fb0f0 / 0x020fb3a4 / 0x020fb450: start, finish, replay cameras) are not ported.
+
 ## Next slices
 
-1. **Cameras** (`config/cameras`), the race grid itself (main 0x0208cb80 + the per-cell bytes), car/car
+1. The camera manager (ov003 0x020fb450: start/finish/replay cameras, BumperCam), the race grid itself (main 0x0208cb80 + the per-cell bytes), car/car
    contacts (the +0x248 sums), and a dynamic trace of `dsCarDynamics_Step` in melonDS to compare the port bit for
    bit (the drop test only checks behaviour).
 2. Renderer, faithful pass: Firebrand's model drawing (dsModel, visual update 0x02126d10 for wheels/shadow),

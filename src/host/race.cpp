@@ -1,14 +1,14 @@
 // tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
 //   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto]
 // Keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
-// Enter = restart the race, Esc = quit.
+// Enter = restart the race, C = other chase camera, Esc = quit.
 //
 // What runs is the ported game code: track scene, piece placement and terrain (slice 2), collision world (3a), car
 // parameters, engine and the full dsCarDynamics step (3b, 3c), and the race progress (dsRaceProgress: countdown,
 // checkpoints, laps, finish, respawn), two 1/60 s ticks per 30 Hz frame as on the DS. The drawing is the host G3D
-// stand-in (src/shim/host/g3d_gl.cpp) fed with the game's own models and piece matrices; cameras
-// (config/cameras) and the HUD are still to port: the camera is a simple chase view and the race state is shown
-// in the window title and on stdout.
+// stand-in (src/shim/host/g3d_gl.cpp) fed with the game's own models and piece matrices, seen from the game's
+// chase camera (config/cameras, dsChaseCamera); the HUD is still to port: the race state is shown in the window
+// title and on stdout.
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +35,7 @@
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
 #include "track/dsTrack.h"
+#include "race/dsChaseCamera.h"
 #include "race/dsRaceProgress.h"
 
 static bool ReadFile(const std::string &path, std::vector<u8> *out)
@@ -127,6 +128,8 @@ struct Race {
     dsCarModelGeometry geo;
     std::unique_ptr<dsCarDynamics> car;
     std::unique_ptr<dsRaceProgress> progress;
+    dsChaseCamera cams[2] = {dsChaseCamera(1), dsChaseCamera(2)}; // config/cameras Chase1 / Chase2
+    int camIndex = 0;
     G3Model *batch = nullptr, *carModel = nullptr;
     std::vector<std::pair<G3Model *, const dsTrackPiece *>> pieces;
 
@@ -166,6 +169,11 @@ bool Race::Load(const char *trackName)
         fprintf(stderr, "no start piece\n");
         return false;
     }
+    for (dsChaseCamera &c : cams) {
+        if (!c.Load("coa"))
+            fprintf(stderr, "config/cameras: no coa entry\n");
+        c.Reset();
+    }
 
     batch = LoadModel("Tracks/coa/texturebatch");
     std::vector<u8> mb;
@@ -194,27 +202,35 @@ void Race::Draw(int w, int h)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    float n = 0.25f, f = 600, t = n * tanf(30.0f * 3.14159265f / 180), r = t * w / h;
+    // The game camera's FOV (config/cameras, 70) is taken as the full vertical angle.
+    const dsChaseCamera &cam = cams[camIndex];
+    float fovy = cam.fov / 4096.0f;
+    float n = 0.25f, f = 600, t = n * tanf(fovy * 0.5f * 3.14159265f / 180), r = t * w / h;
     glFrustum(-r, r, -t, t, n, f);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    const MtxFx43 &m = car->matrix;
-    float pos[3] = {m.m[3][0] / 4096.0f, m.m[3][1] / 4096.0f, m.m[3][2] / 4096.0f};
-    float fwd[3] = {m.m[2][0] / 4096.0f, 0, m.m[2][2] / 4096.0f};
-    float fl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
-    if (fl > 0.01f) {
-        fwd[0] /= fl;
-        fwd[2] /= fl;
+    const MtxFx43 &cm = cam.matrix;
+    float eye[3], at[3], up[3];
+    for (int i = 0; i < 3; i++) {
+        eye[i] = cm.m[3][i] / 4096.0f;
+        at[i] = eye[i] + cm.m[2][i] / 4096.0f;
+        up[i] = cm.m[1][i] / 4096.0f;
     }
-    float eye[3] = {pos[0] - fwd[0] * 7, pos[1] + 2.8f, pos[2] - fwd[2] * 7};
     if (topView) {
-        eye[0] = pos[0] - fwd[0] * 40;
-        eye[1] = pos[1] + 60;
-        eye[2] = pos[2] - fwd[2] * 40;
+        const MtxFx43 &m = car->matrix;
+        float pos[3] = {m.m[3][0] / 4096.0f, m.m[3][1] / 4096.0f, m.m[3][2] / 4096.0f};
+        float fwd[3] = {m.m[2][0] / 4096.0f, 0, m.m[2][2] / 4096.0f};
+        float fl = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+        if (fl > 0.01f) {
+            fwd[0] /= fl;
+            fwd[2] /= fl;
+        }
+        float e[3] = {pos[0] - fwd[0] * 40, pos[1] + 60, pos[2] - fwd[2] * 40};
+        float u[3] = {0, 1, 0};
+        LookAt(e, pos, u);
+    } else {
+        LookAt(eye, at, up);
     }
-    float at[3] = {pos[0] + fwd[0] * 2, pos[1] + 0.8f, pos[2] + fwd[2] * 2};
-    float up[3] = {0, 1, 0};
-    LookAt(eye, at, up);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_ALPHA_TEST);
@@ -321,7 +337,7 @@ int main(int argc, char **argv)
     Race race;
     if (!race.Load(trackName))
         return 1;
-    size_t shownEvents = 0;
+    size_t shownEvents = 0, resets = 0;
     const u32 STEP_MS = 1000 / 30;
     u32 next = SDL_GetTicks();
     bool quit = false;
@@ -336,6 +352,10 @@ int main(int argc, char **argv)
                 race.progress->Reset(false);
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN)
                 race.progress->Reset(true);
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_c) {
+                race.camIndex ^= 1;
+                race.cams[race.camIndex].Reset();
+            }
         }
         const u8 *k = SDL_GetKeyboardState(nullptr);
         dsCarInput in;
@@ -348,6 +368,13 @@ int main(int argc, char **argv)
             const dsRaceEvent &ev = race.progress->events[shownEvents];
             printf("[%d.%02d] %s %d\n", ev.time >> 12, ((ev.time & 0xfff) * 100) >> 12, names[ev.type], ev.value);
         }
+        if (resets != race.progress->events.size()) // restart / respawn: the camera starts over
+            for (; resets < race.progress->events.size(); resets++) {
+                dsRaceEvent::Type ty = race.progress->events[resets].type;
+                if (ty == dsRaceEvent::RESTART || ty == dsRaceEvent::RESPAWN)
+                    race.cams[race.camIndex].Reset();
+            }
+        race.cams[race.camIndex].Update(*race.car); // camera vtable +0x1c, once per frame
         UpdateTitle(win, *race.progress);
         race.Draw(W, H);
         if (frames >= 0 && frame == frames - 1 && shot) {
@@ -356,6 +383,9 @@ int main(int argc, char **argv)
             const MtxFx43 &m = race.car->matrix;
             printf("frame %d pos=%d,%d,%d speed=%d gear=%d\n", frame, m.m[3][0], m.m[3][1], m.m[3][2],
                    race.car->speed, race.car->engine->gear);
+            const MtxFx43 &c = race.cams[race.camIndex].matrix;
+            printf("camera pos=%d,%d,%d fwd=%d,%d,%d up=%d,%d,%d\n", c.m[3][0], c.m[3][1], c.m[3][2], c.m[2][0], c.m[2][1],
+                   c.m[2][2], c.m[1][0], c.m[1][1], c.m[1][2]);
         }
         SDL_GL_SwapWindow(win);
         if (frames < 0) {

@@ -4,6 +4,8 @@
 // --raw    do not enable the VFS: files are read from the directory (the game's "raw:" path)
 // --cat    write one game file to stdout (through dsFileSystem::Open)
 // --carparams  load Scripts/config/vehicles.luac like ov003 does and print every car's parameters
+// --cameras    load Scripts/config/cameras like main 0x0208fa18 for both chase cameras of every environment,
+//              and print the spring damping table lookups (main 0x020abc68)
 #include <stdio.h>
 #include <string.h>
 #ifdef _WIN32
@@ -12,6 +14,7 @@
 #endif
 
 #include "car/dsCarParams.h"
+#include "race/dsChaseCamera.h"
 #include "fs/dsFileSystem.h"
 #include "nitro.h"
 
@@ -59,11 +62,33 @@ static int DumpCarParams()
     return table.All().empty() ? 1 : 0;
 }
 
+static int DumpCameras()
+{
+    static const char *const envs[] = {"sta", "isl", "sno", "coa"};
+    int rc = 0;
+    for (const char *env : envs)
+        for (int kind = 1; kind <= 2; kind++) {
+            dsChaseCamera c(kind);
+            if (!c.Load(env)) {
+                printf("camera %s %d missing\n", env, kind);
+                rc = 1;
+                continue;
+            }
+            printf("camera %s %d Height=%d Distance=%d TiltTightness=%d LookAtHeight=%d FOV=%d DirTightness=%d"
+                   " DistInc=%d DistDec=%d RollMode=%d DistTightness=%d damping=%d\n", env, kind, c.height, c.distance,
+                   c.tiltTightness, c.lookAtHeight, c.fov, c.dirTightness, c.distInc, c.distDec, c.rollMode,
+                   c.distSpring.k, c.distSpring.d);
+        }
+    for (fx32 x = -0x4000; x <= 0x160000; x += 0x1800)
+        printf("damping %d %d\n", x, dsSpring::Damping(x));
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = ".";
     const char *cat = nullptr;
-    bool raw = false, carParams = false;
+    bool raw = false, carParams = false, cameras = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -73,8 +98,10 @@ int main(int argc, char **argv)
             cat = argv[++i];
         else if (!strcmp(argv[i], "--carparams"))
             carParams = true;
+        else if (!strcmp(argv[i], "--cameras"))
+            cameras = true;
         else {
-            fprintf(stderr, "usage: %s --root <dir> [--raw] [--cat <path>] [--carparams]\n", argv[0]);
+            fprintf(stderr, "usage: %s --root <dir> [--raw] [--cat <path>] [--carparams] [--cameras]\n", argv[0]);
             return 2;
         }
     }
@@ -92,5 +119,7 @@ int main(int argc, char **argv)
         rc |= Cat(cat);
     if (carParams)
         rc |= DumpCarParams();
+    if (cameras)
+        rc |= DumpCameras();
     return rc;
 }

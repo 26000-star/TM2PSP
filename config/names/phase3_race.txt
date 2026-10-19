@@ -66,3 +66,20 @@ ov003:02105408 dsHudClock_Update
 02057db4 dsMtx43_InverseScaled
 020b32a0 __sinit_dsFrameTime             # *0x020d6a78 = FX_Inv(60.0)
 01ffa9d4 dsVec_Distance
+
+# ---- chase camera (vtable 0x020c00b8) ----
+0208fe10 dsChaseCamera_ctor
+0208fa18 dsChaseCamera_Load            # config/cameras, Chase1*/Chase2* of the environment
+0208fd68 dsChaseCamera_Reset           # vtable +0x18
+0208e694 dsChaseCamera_Update          # vtable +0x1c (player)
+0208e524 dsCamera_UpdateBase           # fade +0x0c/+0x10, FOV ramp +0x2c/+0x30/+0x34
+0208e51c dsCamera_IsActive
+0208e604 dsCamera_Matrix
+020abb68 dsSpring_Reset
+020abb78 dsSpring_Step
+020abc38 dsSpring_ctor
+020abc68 dsSpring_Damping              # table 0x020c1d08 (30 stiffness/damping pairs)
+01ffabfc dsMtx43_LookAt
+ov003:021226f8 dsCarDynamics_HasContact
+ov003:0210eac8 dsHumanPlayer_IsAirborne # vtable +0x2c
+ov003:0210e278 dsPlayer_SetDisplayMatrix
