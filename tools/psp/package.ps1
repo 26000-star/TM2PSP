@@ -8,7 +8,11 @@ Set-Location $repo
 $g = 'build\psp\package\PSP\GAME\TM2PSP'
 New-Item -ItemType Directory -Force $g | Out-Null
 Copy-Item build\psp\tm_race\EBOOT.PBP "$g\EBOOT.PBP" -Force
-robocopy extract\files "$g\files" /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+# Only the VFS is read by the race (vfs.zip: models, tracks, scripts; vfs.bin/vfs.dat: its index); audio, movies,
+# Download Play and WFC files are not used yet.
+if (Test-Path "$g\files") { Remove-Item -Recurse -Force "$g\files" }
+New-Item -ItemType Directory -Force "$g\files" | Out-Null
+Copy-Item extract\files\vfs.zip, extract\files\vfs.bin, extract\files\vfs.dat "$g\files\"
 "easy/0" | Out-File -Encoding ascii "$g\track.txt"
 @"
 TM2PSP - course Coast (portage de TrackMania Turbo DS)

@@ -578,4 +578,5 @@ essayer sur la console, ce que l'automatisation n'a pas le droit de faire) :
   most 3 world units (`G3_GU_MAX_EDGE`): vertex arrays 0.26 -> 1.5 MB, heap 4.2 MB, PPSSPP image and car/camera
   state unchanged. To confirm on the console; if pieces still drop, lower the limit or clip near triangles on the
   CPU.
-- The package now holds only `vfs.zip`, `vfs.bin` and `vfs.dat` (27.5 MB): the race reads nothing else.
+- The package now holds only `vfs.zip`, `vfs.bin` and `vfs.dat` (26.9 MB): the race reads nothing else (checked
+  in PPSSPP from the package folder).
