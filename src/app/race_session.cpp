@@ -281,6 +281,7 @@ bool RaceSession::Load(const char *trackName)
     G3SetDrawLight(nullptr);
     if (skyModel)
         skyModel->Prepare(nullptr);
+    hud.Init(progress->lapCount);
     printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
            batch ? "ok" : "missing", carModel ? "ok" : "missing");
     return true;
@@ -347,9 +348,53 @@ void RaceSession::Frame(const dsCarInput &in)
                 cams[camIndex].Reset();
         }
     cams[camIndex].Update(*car); // camera vtable +0x1c, once per frame
+    hud.Update(*progress, car->speed, 2, recordSplits, recordTime); // end of dsRace_Update (0x02113048)
 }
 
-// ---- HUD stand-in: a 5 x 7 bitmap font (the game's HUD sprites are not ported) ----
+G2CellBank *const *RaceHudBanks()
+{
+    static G2CellBank *banks[HUD_BANK_COUNT];
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        for (int b = 0; b < HUD_BANK_COUNT; b++) {
+            const char *ncer, *ncgr, *nclr;
+            int cells;
+            dsHud::BankFiles(b, &ncer, &ncgr, &nclr, &cells);
+            std::vector<u8> e, g, c;
+            G2CellBank *bank = new G2CellBank;
+            if (RaceReadFile(ncer, &e) && RaceReadFile(ncgr, &g) && RaceReadFile(nclr, &c) &&
+                bank->Load(g, e, c, cells)) {
+                banks[b] = bank;
+                printf("hud bank %d: %d cells, atlas %d x %d\n", b, (int)bank->cells.size(), bank->width,
+                       bank->height);
+            } else {
+                printf("hud bank %d: %s missing\n", b, ncer);
+                delete bank;
+            }
+        }
+    }
+    return banks;
+}
+
+void RaceHudSprites(int w, int h, const dsHud &hud, RaceSpriteFn sprite, void *user)
+{
+    G2CellBank *const *banks = RaceHudBanks();
+    float k = h / 192.0f, ox = w / 2.0f - 128 * k;
+    for (const dsHudSprite &s : hud.sprites) {
+        const G2CellBank *b = banks[s.bank];
+        if (!s.visible || !b || s.cell < 0 || s.cell >= (int)b->cells.size())
+            continue;
+        const G2Cell &c = b->cells[s.cell];
+        if (!c.w)
+            continue;
+        // Wider than 4:3 (the PSP): the parts on the sides follow the screen edges.
+        float x = ox + s.anchor * ox + (s.x / 4096.0f + c.x0) * k, y = (s.y / 4096.0f + c.y0) * k;
+        sprite(*b, c, x, y, c.w * k, c.h * k, user);
+    }
+}
+
+// ---- Text stand-in: a 5 x 7 bitmap font (menus and the HUD messages) ----
 struct Glyph {
     char c;
     const char *rows[7];
@@ -410,40 +455,14 @@ const char *const *RaceGlyph(char c)
 
 void RaceHudLayout(int w, int h, float s, const dsRaceProgress &rp, RaceTextFn text, void *user)
 {
-    fx32 t = rp.finished ? rp.finishTime : rp.clock;
-    int cs = (int)(((s64)(t & 0xfff) * 100) >> 12), sec = t >> 12;
+    // The game's HUD (dsHud: countdown, speed, laps, splits, clock) is drawn as sprites; only its text messages
+    // (+0x3c, localised strings, not ported) keep a stand-in here.
     char buf[64];
-    if (!rp.countdown) {
-        snprintf(buf, sizeof buf, "%d:%02d.%02d", sec / 60, sec % 60, cs);
-        text(w - (6 * 4 * 9 + 12) * s, 12 * s, 4 * s, buf, 1, 1, 1, user);
-    }
-    int cps = rp.checkpointCount - (rp.startPiece && rp.startPiece->type == PIECE_MULTILAP ? 1 : 0);
-    int passed = 0;
-    for (const dsTrigger *tr : rp.Triggers())
-        if (tr->kind == dsTrigger::CHECKPOINT && !tr->pending)
-            passed++;
-    snprintf(buf, sizeof buf, "CP %d/%d", passed, cps);
-    text(12 * s, 12 * s, 4 * s, buf, 1, 0.9f, 0.3f, user);
-    if (rp.lapCount > 1) {
-        snprintf(buf, sizeof buf, "TOUR %d/%d", rp.finished ? rp.lapCount : rp.lapsDone + 1, rp.lapCount);
-        text(12 * s, 50 * s, 4 * s, buf, 1, 0.9f, 0.3f, user);
-    }
     const dsRaceEvent *last = rp.events.empty() ? nullptr : &rp.events.back();
-    if (rp.countdown) {
-        snprintf(buf, sizeof buf, "%d", sec + 1);
-        text(w / 2 - 6 * 12 / 2 * s, h / 3, 12 * s, buf, sec >= 1 ? 1.0f : 1.0f, sec >= 1 ? 0.25f : 0.8f, 0.2f, user);
-    } else if (rp.finished) {
-        text(w / 2 - 6 * 8 * 8 / 2 * s, h / 3, 8 * s, "ARRIVEE!", 0.3f, 1, 0.3f, user);
-    } else if (last && rp.clock - last->time < 0x2000) {
-        if (last->type == dsRaceEvent::GO)
-            text(w / 2 - 6 * 12 * 3 / 2 * s, h / 3, 12 * s, "GO!", 0.3f, 1, 0.3f, user);
-        else if (last->type == dsRaceEvent::MISSED) {
-            snprintf(buf, sizeof buf, "%d CP MANQUE%s", last->value, last->value > 1 ? "S" : "");
-            text(w / 2 - 6 * 5 * (int)strlen(buf) / 2 * s, h / 3, 5 * s, buf, 1, 0.3f, 0.3f, user);
-        } else if (last->type == dsRaceEvent::CHECKPOINT || last->type == dsRaceEvent::LAP) {
-            int ls = last->time >> 12, lc = (int)(((s64)(last->time & 0xfff) * 100) >> 12);
-            snprintf(buf, sizeof buf, "%d:%02d.%02d", ls / 60, ls % 60, lc);
-            text(w / 2 - 6 * 6 * (int)strlen(buf) / 2 * s, h / 3, 6 * s, buf, 0.4f, 0.8f, 1, user);
-        }
+    if (rp.finished) {
+        text(w / 2 - 6 * 6 * 8 / 2 * s, h * 0.42f, 6 * s, "ARRIVEE!", 0.3f, 1, 0.3f, user);
+    } else if (last && last->type == dsRaceEvent::MISSED && rp.clock - last->time < 0x2000) {
+        snprintf(buf, sizeof buf, "%d CP MANQUE%s", last->value, last->value > 1 ? "S" : "");
+        text(w / 2 - 6 * 5 * (int)strlen(buf) / 2 * s, h * 0.42f, 5 * s, buf, 1, 0.3f, 0.3f, user);
     }
 }

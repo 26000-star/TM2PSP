@@ -36,8 +36,9 @@ public:
     // One 30 Hz frame: the race advances while playing; a finish records the best time and opens the result menu
     // after 3 s (unless menus are off: the drivers' auto tests).
     void Frame(const dsCarInput &in);
-    // HUD while playing, the menus otherwise, for a w x h screen (scale as RaceHudLayout).
-    void Overlay(int w, int h, float scale, RaceTextFn text, RaceRectFn rect, void *user) const;
+    // HUD while playing (the game's sprites, then the text stand-in), the menus otherwise, for a w x h screen
+    // (scale as RaceHudLayout).
+    void Overlay(int w, int h, float scale, RaceTextFn text, RaceRectFn rect, RaceSpriteFn sprite, void *user) const;
 
     Screen screen = TRACKS;
     std::unique_ptr<RaceSession> race;
@@ -54,6 +55,7 @@ private:
 
     std::string m_savePath, m_ok, m_back;
     std::unique_ptr<fx32[]> m_best; // best finish time per track, 0 = none
+    std::unique_ptr<std::vector<fx32>[]> m_splits; // the best run's split times per track (HUD differences)
     int m_count = 0;
     int m_finishFrames = -1;  // frames since the finish (-1: not finished)
     bool m_newRecord = false;

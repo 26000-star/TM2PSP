@@ -231,6 +231,44 @@ static void DrawRect(float x, float y, float w, float h, float r, float g, float
     glEnd();
 }
 
+// HUD sprite: one cell of a bank's atlas (uploaded on first use, kept for the program's life) as a textured quad.
+static void DrawSprite(const G2CellBank &bank, const G2Cell &c, float x, float y, float w, float h, void *)
+{
+    G2CellBank &b = const_cast<G2CellBank &>(bank);
+    if (!b.gl) {
+        std::vector<u8> rgba((size_t)b.width * b.height * 4);
+        for (size_t i = 0; i < b.pixels.size(); i++) {
+            u16 p = b.pixels[i];
+            rgba[i * 4] = (u8)((p & 31) * 255 / 31);
+            rgba[i * 4 + 1] = (u8)((p >> 5 & 31) * 255 / 31);
+            rgba[i * 4 + 2] = (u8)((p >> 10 & 31) * 255 / 31);
+            rgba[i * 4 + 3] = p & 0x8000 ? 255 : 0;
+        }
+        glGenTextures(1, &b.gl);
+        glBindTexture(GL_TEXTURE_2D, b.gl);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, b.width, b.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    }
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, b.gl);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    float u0 = (float)c.u / b.width, v0 = (float)c.v / b.height;
+    float u1 = (float)(c.u + c.w) / b.width, v1 = (float)(c.v + c.h) / b.height;
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v0);
+    glVertex2f(x, y);
+    glTexCoord2f(u1, v0);
+    glVertex2f(x + w, y);
+    glTexCoord2f(u1, v1);
+    glVertex2f(x + w, y + h);
+    glTexCoord2f(u0, v1);
+    glVertex2f(x, y + h);
+    glEnd();
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glDisable(GL_TEXTURE_2D);
+}
+
 static void DrawHud(int w, int h, const RaceApp &app)
 {
     glMatrixMode(GL_PROJECTION);
@@ -243,7 +281,7 @@ static void DrawHud(int w, int h, const RaceApp &app)
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    app.Overlay(w, h, 1, DrawText, DrawRect, nullptr);
+    app.Overlay(w, h, 1, DrawText, DrawRect, DrawSprite, nullptr);
     glEnable(GL_DEPTH_TEST);
 }
 

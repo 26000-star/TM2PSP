@@ -9,7 +9,9 @@
 
 #include "car/dsCarDynamics.h"
 #include "car/dsCarParams.h"
+#include "g2d_cells.h"
 #include "g3d_model.h"
+#include "hud/dsHud.h"
 #include "race/dsChaseCamera.h"
 #include "race/dsRaceProgress.h"
 #include "track/dsTrack.h"
@@ -34,6 +36,11 @@ struct RaceSession {
     std::vector<std::unique_ptr<G3Model>> models; // owns batch, carModel and the piece models
     std::vector<char> visible;  // per entry of `pieces`, from Cull
     size_t shownEvents = 0, resets = 0;
+    // The game's HUD (dsHud): its sprites are drawn by the drivers with the banks of RaceHudBanks. The record's
+    // split times (passing order) and finish time are set by the application (none: 0 / empty).
+    dsHud hud;
+    std::vector<fx32> recordSplits;
+    fx32 recordTime = 0;
 
     // The track's collision shapes leave the collision world with the track; the drivers clear the world's mesh
     // cache after deleting a session (RaceUnloadWorld) so that reloading tracks does not grow the heap.
@@ -81,8 +88,18 @@ G3Model *RaceLoadModel(const std::string &name, bool upload = true); // graphics
 // DS 4x3 matrix (row vectors, fx32) to a column-major 4x4 float matrix (GL and GU layout).
 void RaceMatrix(const MtxFx43 &m, float *g);
 
-// HUD stand-in: clock, checkpoints and laps in the corners, the countdown and the race messages in the middle, for
-// a w x h screen; `scale` multiplies the pixel sizes (1 at 768 x 576). Text is drawn by the callback.
+// The HUD's cell banks (dsHudBank order), loaded once on first use and kept (the drivers upload them); null when
+// a file is missing.
+G2CellBank *const *RaceHudBanks();
+// The HUD sprites for a w x h screen: the DS top screen (256 x 192) scaled by h / 192 around the screen's centre;
+// on a wider screen the side parts move to the edges (dsHudSprite::anchor).
+// `sprite` receives the bank, the cell's place in the atlas and the destination rectangle.
+typedef void (*RaceSpriteFn)(const G2CellBank &bank, const G2Cell &cell, float x, float y, float w, float h,
+                             void *user);
+void RaceHudSprites(int w, int h, const dsHud &hud, RaceSpriteFn sprite, void *user);
+
+// HUD text stand-in: the race messages (checkpoints missed, finish) in the middle of a w x h screen; `scale`
+// multiplies the pixel sizes (1 at 768 x 576). Text is drawn by the callback.
 typedef void (*RaceTextFn)(float x, float y, float px, const char *s, float r, float g, float b, void *user);
 void RaceHudLayout(int w, int h, float scale, const dsRaceProgress &rp, RaceTextFn text, void *user);
 // Rows of a 5 x 7 glyph ('1' = pixel), NULL for characters without a glyph.

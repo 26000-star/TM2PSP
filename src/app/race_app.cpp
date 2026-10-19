@@ -47,7 +47,8 @@ const RaceTrackEntry *RaceTracks(int *count)
 }
 
 RaceApp::RaceApp(const std::string &savePath, const char *okName, const char *backName)
-    : m_savePath(savePath), m_ok(okName), m_back(backName), m_best(new fx32[kTrackCount]()), m_count(kTrackCount)
+    : m_savePath(savePath), m_ok(okName), m_back(backName), m_best(new fx32[kTrackCount]()),
+      m_splits(new std::vector<fx32>[kTrackCount]), m_count(kTrackCount)
 {
     LoadSave();
 }
@@ -62,7 +63,7 @@ int RaceApp::FindTrack(const char *id) const
     return -1;
 }
 
-// Save file: "last <track>" and "best <track> <fx32 time>" lines (text, a few hundred bytes).
+// Save file: "last <track>", "best <track> <fx32 time>" and "split <track> <fx32 time>..." lines (text, a few KB).
 void RaceApp::LoadSave()
 {
     if (m_savePath.empty())
@@ -70,10 +71,19 @@ void RaceApp::LoadSave()
     FILE *f = fopen(m_savePath.c_str(), "rb");
     if (!f)
         return;
-    char line[128], id[64];
+    char line[1024], id[64];
     long t;
+    int n;
     while (fgets(line, sizeof line, f)) {
-        if (sscanf(line, "best %63s %ld", id, &t) == 2) {
+        if (sscanf(line, "split %63s%n", id, &n) == 1) {
+            int i = FindTrack(id);
+            if (i < 0)
+                continue;
+            m_splits[i].clear();
+            int k;
+            for (const char *p = line + n; sscanf(p, "%ld%n", &t, &k) == 1; p += k)
+                m_splits[i].push_back((fx32)t);
+        } else if (sscanf(line, "best %63s %ld", id, &t) == 2) {
             int i = FindTrack(id);
             if (i >= 0 && t > 0)
                 m_best[i] = (fx32)t;
@@ -96,8 +106,15 @@ void RaceApp::WriteSave() const
     if (track >= 0)
         fprintf(f, "last %s\n", kTracks[track].id);
     for (int i = 0; i < m_count; i++)
-        if (m_best[i] > 0)
+        if (m_best[i] > 0) {
             fprintf(f, "best %s %ld\n", kTracks[i].id, (long)m_best[i]);
+            if (!m_splits[i].empty()) {
+                fprintf(f, "split %s", kTracks[i].id);
+                for (fx32 t : m_splits[i])
+                    fprintf(f, " %ld", (long)t);
+                fprintf(f, "\n");
+            }
+        }
     fclose(f);
 }
 
@@ -121,6 +138,8 @@ bool RaceApp::Start(int index)
         return false;
     }
     race->lighting = race->lighting && lighting;
+    race->recordSplits = m_splits[index];
+    race->recordTime = m_best[index];
     track = selected = index;
     screen = PLAYING;
     m_finishFrames = -1;
@@ -204,6 +223,9 @@ void RaceApp::Frame(const dsCarInput &in)
         m_finishFrames = 0;
         if (rp.finishTime > 0 && (m_best[track] <= 0 || rp.finishTime < m_best[track])) {
             m_best[track] = rp.finishTime;
+            m_splits[track] = race->hud.splits;
+            race->recordSplits = m_splits[track];
+            race->recordTime = m_best[track];
             m_newRecord = true;
             WriteSave();
         }
@@ -213,7 +235,8 @@ void RaceApp::Frame(const dsCarInput &in)
     }
 }
 
-void RaceApp::Overlay(int w, int h, float s, RaceTextFn text, RaceRectFn rect, void *user) const
+void RaceApp::Overlay(int w, int h, float s, RaceTextFn text, RaceRectFn rect, RaceSpriteFn sprite,
+                      void *user) const
 {
     char buf[64], tb[16];
     if (screen == TRACKS) {
@@ -238,8 +261,10 @@ void RaceApp::Overlay(int w, int h, float s, RaceTextFn text, RaceRectFn rect, v
         text(40 * s, h - 36 * s, 3 * s, buf, 0.8f, 0.8f, 0.8f, user);
         return;
     }
-    if (race)
+    if (race) {
+        RaceHudSprites(w, h, race->hud, sprite, user);
         RaceHudLayout(w, h, s, *race->progress, text, user);
+    }
     if (screen == PLAYING)
         return;
 

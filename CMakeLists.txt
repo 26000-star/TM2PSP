@@ -63,7 +63,7 @@ if(TM_PLATFORM STREQUAL psp)
 
   # The race (src/psp/race_psp.cpp): G3D stand-in on sceGu, sceCtrl input.
   add_executable(tm_race src/psp/race_psp.cpp src/app/race_session.cpp src/app/race_app.cpp
-                 src/shim/common/g3d_model.cpp
+                 src/shim/common/g3d_model.cpp src/shim/common/g2d_cells.cpp
                  src/shim/psp/g3d_gu.cpp)
   target_include_directories(tm_race PRIVATE src/app src/shim/common)
   # newlib's int32_t is long on the Allegrex (same 32 bits as int): %d on s32/fx32 is harmless there.
@@ -99,7 +99,7 @@ if(TM_PLATFORM STREQUAL host)
   endif()
   find_package(OpenGL QUIET)
   if(SDL2_FOUND AND OPENGL_FOUND)
-    add_library(tm_g3d STATIC src/shim/common/g3d_model.cpp src/shim/host/g3d_gl.cpp)
+    add_library(tm_g3d STATIC src/shim/common/g3d_model.cpp src/shim/common/g2d_cells.cpp src/shim/host/g3d_gl.cpp)
     target_include_directories(tm_g3d PUBLIC src/shim/common src/shim/host)
     target_link_libraries(tm_g3d PUBLIC tm_shim OpenGL::GL)
     add_executable(tm_race src/host/race.cpp src/app/race_session.cpp src/app/race_app.cpp)

@@ -33,7 +33,7 @@ def bgr555(v, a=255):
 def read_nclr(data):
     b = blocks(data)["PLTT"]
     bit_depth, _, size, off = struct.unpack_from("<IIII", b, 0)
-    raw = b[off - 8:off - 8 + size]  # offsets count from the block start, including its 8-byte header
+    raw = b[off:off + size]  # offsets count from the block payload (after the 8-byte block header)
     colors = [struct.unpack_from("<H", raw, i)[0] for i in range(0, len(raw) - 1, 2)]
     return {"bpp": 4 if bit_depth == 3 else 8, "colors": colors}
 
@@ -42,7 +42,7 @@ def read_ncgr(data):
     b = blocks(data)["CHAR"]
     h_tiles, w_tiles, bit_depth, mapping, tiled_flag, size, off = struct.unpack_from("<HHIIIII", b, 0)
     bpp = 4 if bit_depth == 3 else 8
-    raw = b[off - 8:off - 8 + size]
+    raw = b[off:off + size]
     return {"bpp": bpp, "w_tiles": w_tiles, "h_tiles": h_tiles, "data": raw,
             "linear": bool(tiled_flag & 1), "mapping": mapping}
 
@@ -61,7 +61,7 @@ def read_nscr(data):
 
 def read_ncer(data):
     b = blocks(data)["CEBK"]
-    n_cells, attr_type, cell_off = struct.unpack_from("<HHI", b, 0)
+    n_cells, attr_type, cell_off, mapping, vram_off = struct.unpack_from("<HHIII", b, 0)
     cells = []
     base = 8 + cell_off - 8 if cell_off else 0x18
     entry_size = 16 if attr_type == 1 else 8
@@ -73,13 +73,21 @@ def read_ncer(data):
             a0, a1, a2 = struct.unpack_from("<HHH", b, oam_base + oam_off + 6 * k)
             oams.append((a0, a1, a2))
         cells.append(oams)
-    return {"cells": cells}
+    # VRAM transfer table (offsets from the block payload): u32 max size, u32 table offset, then per cell
+    # {u32 source offset, u32 size} in the NCGR. Such cells are DMA'd to their own VRAM slot, so their OAM tile
+    # numbers count from that cell's source data.
+    srcs = [0] * n_cells
+    if vram_off:
+        tab = vram_off + struct.unpack_from("<I", b, vram_off + 4)[0]
+        srcs = [struct.unpack_from("<I", b, tab + 8 * i)[0] for i in range(n_cells)]
+    # mapping: OBJ 1D boundary 32 << mapping bytes (0..3 = 32K..256K), the unit of the OAM tile number.
+    return {"cells": cells, "srcs": srcs, "boundary": 32 << mapping if mapping < 4 else 32}
 
 
-def tile_pixel(ncgr, tile, x, y):
+def tile_pixel(ncgr, tile, x, y, base=0):
     bpp = ncgr["bpp"]
     tbytes = 8 * bpp
-    o = tile * tbytes + (y * 8 + x) * bpp // 8
+    o = base + tile * tbytes + (y * 8 + x) * bpp // 8
     if o >= len(ncgr["data"]):
         return 0
     v = ncgr["data"][o]
@@ -109,7 +117,7 @@ OBJ_SIZES = {(0, 0): (8, 8), (0, 1): (16, 16), (0, 2): (32, 32), (0, 3): (64, 64
              (2, 0): (8, 16), (2, 1): (8, 32), (2, 2): (16, 32), (2, 3): (32, 64)}
 
 
-def render_cell(ncgr, nclr, oams, boundary=32):
+def render_cell(ncgr, nclr, oams, boundary=32, src=0):
     """Draws one cell (list of OAM entries) into a canvas sized to its bounding box."""
     parts = []
     for a0, a1, a2 in oams:
@@ -124,15 +132,14 @@ def render_cell(ncgr, nclr, oams, boundary=32):
     x0, y0 = min(p[0] for p in parts), min(p[1] for p in parts)
     x1, y1 = max(p[0] + p[2] for p in parts), max(p[1] + p[3] for p in parts)
     px = [[(0, 0, 0, 0)] * (x1 - x0) for _ in range(y1 - y0)]
-    step = boundary // (8 * ncgr["bpp"])  # 1D mapping: tile number unit = boundary bytes
     for x, y, w, h, tile, pal, hf, vf in parts:
-        first = tile * max(step, 1)
+        first = src + tile * boundary  # 1D mapping: the OAM tile number counts boundary-sized bytes, any bpp
         for ty in range(h // 8):
             for tx in range(w // 8):
-                t = first + ty * (w // 8) + tx
+                t = ty * (w // 8) + tx
                 for yy in range(8):
                     for xx in range(8):
-                        c = tile_pixel(ncgr, t, xx, yy)
+                        c = tile_pixel(ncgr, t, xx, yy, first)
                         if not c:
                             continue
                         dx = (w - 1 - (tx * 8 + xx)) if hf else tx * 8 + xx
@@ -167,6 +174,18 @@ def main():
             save_png(render_screen(read_ncgr(open(cg, "rb").read()), read_nclr(open(cl, "rb").read()),
                                    read_nscr(open(scr, "rb").read())),
                      os.path.join(out, os.path.basename(base) + ".png"))
+            n += 1
+    for cer in byext.get(".ncer", []):
+        base = os.path.splitext(cer)[0]
+        cg = base + ".NCGR"
+        cl = next((p for p in [base + ".NCLR"] + glob.glob(os.path.join(src, "*.NCLR")) if os.path.exists(p)), None)
+        if not (os.path.exists(cg) and cl):
+            continue
+        cells = read_ncer(open(cer, "rb").read())
+        ncgr, nclr = read_ncgr(open(cg, "rb").read()), read_nclr(open(cl, "rb").read())
+        for i, oams in enumerate(cells["cells"]):
+            save_png(render_cell(ncgr, nclr, oams, cells["boundary"], cells["srcs"][i]),
+                     os.path.join(out, "%s_%02d.png" % (os.path.basename(base), i)))
             n += 1
     print("rendered %d screens to %s (%d files scanned)" % (n, out, len(files)))
 

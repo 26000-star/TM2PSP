@@ -265,6 +265,41 @@ void DrawRect(float x, float y, float w, float h, float r, float g, float b, flo
     sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, nullptr, v);
 }
 
+struct TexSpriteVertex {
+    float u, v;
+    float x, y, z;
+};
+
+// HUD sprite: one cell of a bank's 5551 atlas (moved once to an aligned buffer the GE reads, kept for the program's
+// life), scaled with bilinear filtering (h / 192 = 1.42 on the PSP).
+void DrawSprite(const G2CellBank &bank, const G2Cell &c, float x, float y, float w, float h, void *)
+{
+    G2CellBank &b = const_cast<G2CellBank &>(bank);
+    if (!b.gu) {
+        size_t n = b.pixels.size() * sizeof(u16);
+        void *p = memalign(16, n);
+        if (!p)
+            return;
+        memcpy(p, b.pixels.data(), n);
+        sceKernelDcacheWritebackRange(p, n);
+        b.gu = p;
+        std::vector<u16>().swap(b.pixels); // the GE's copy is the only one needed
+    }
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuTexMode(GU_PSM_5551, 0, 0, GU_FALSE);
+    sceGuTexImage(0, b.width, b.height, b.width, b.gu);
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+    TexSpriteVertex *v = (TexSpriteVertex *)sceGuGetMemory(sizeof(TexSpriteVertex) * 2);
+    v[0] = {(float)c.u, (float)c.v, x, y, 0};
+    v[1] = {(float)(c.u + c.w), (float)(c.v + c.h), x + w, y + h, 0};
+    sceGuDrawArray(GU_SPRITES, GU_TEXTURE_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_2D, 2, nullptr, v);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuDisable(GU_TEXTURE_2D);
+}
+
 // Frame-time log (perf.txt next to the EBOOT turns it on): one line per second of racing in frametimes.txt with the
 // averages and maxima of the race update, the GE list build and the GE wait (ms), the frames that missed their
 // VBlank and the pieces drawn. Lines are kept in memory and appended to the file only outside the race (pause,
@@ -489,7 +524,7 @@ int main(int argc, char **argv)
         sceGuDisable(GU_DEPTH_TEST);
         sceGuDisable(GU_TEXTURE_2D);
         sceGuDisable(GU_CULL_FACE);
-        app.Overlay(SCR_W, SCR_H, 0.5f, DrawText, DrawRect, nullptr);
+        app.Overlay(SCR_W, SCR_H, 0.5f, DrawText, DrawRect, DrawSprite, nullptr);
         if (overlay)
             DrawText(4, SCR_H - 12, 1.5f, timing, 1, 1, 1, nullptr);
         sceGuEnable(GU_DEPTH_TEST);
