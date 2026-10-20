@@ -802,6 +802,45 @@ colour first.
   last piece drawn (a black part of the car changed colour with culling); each shape now starts at (0, 0) as the
   PSP arrays do.
 
+### Not done in run 3: HUD messages, sound, sea backdrop (findings for the next run)
+
+- **HUD messages** (+0x3c, update 0x021097d4, show 0x02109658 / by key 0x02109778): three text objects of the
+  game's text engine (main 0x0208547c(font manager *0x020d35cc, text, x 128, y 102, ..., width 252): +0x0c font 0
+  colour 7, +0x10 font 1 colour 0, +0x14 font 1 offset by the vector at 0x0213784c with +0x3a = 1 (shadow), colour 1
+  when shown), 120 frames. Keys: `FreeWheeling` while the car's +0x4e8 flag is set (HUD update, read by ov003 0x0210e9f0),
+  `CheckpointMissed` / `CheckpointsMissed` formatted with the count at the finish (0x02104620, from
+  dsRaceMode_OnFinish 0x02115704). French: "Roue libre !", "Vous avez manqué %d checkpoint(s).".
+  Strings: `strings/Main/tokens.dat` = 3 x {u16 count, u32 size} (Common 49, FrontEnd 904, BackEnd 185), 256 u16
+  bucket sizes, then the names block of {u8 file, lower-case name, 0}; a key's index is its place in the block
+  (lookup main 0x0207e4c4: bucket = (h = h x 33 + (c & 0xdf), seed 5381) & 0xff, case-insensitive compare), and
+  file k's `.str` strings ({u16 length, chars}) go in order to the names of file k (0x0207e5a0); checked in Python.
+  Missing piece: the fonts' character -> cell map for non-ASCII letters (Font20 has 148 cells: 0x21..0x7e then 54
+  Latin-1 glyphs ¡ © ® ° ¿ À Á Â ... ü in code-point order); it is in the text engine, not found yet.
+- **Sound** (`audio/sound_data.sdat`, SSEQ/SBNK/SWAR, sceAudio) and the **animated sea backdrop**
+  (`Misc/CoastSea`, ov003 0x0211de20 / 0x0213079c) are not started.
+
+## Bilan de la phase 5, run 3 (rapport, 2026-10-20)
+
+**Nettoyage, les 4 bugs signalés sur PSP-3000 et le HUD terminés ; ombre et panneaux du HUD en plus.** Tout est
+vérifié sur l'hôte et dans PPSSPP ; l'effet réel sur la console reste à confirmer par l'utilisateur.
+
+- Branche wip/parallel-bugfix relue contre le code DS et fusionnée (case de piste + ½ case, passe translucide).
+- 0c boosters : bonne pièce donc bonne direction (152 points de booster, 0 erreur). 0b feux arrière : dessinés
+  seulement quand le jeu les allume (frein, marche arrière), comme les contrôleurs de matériau du DS. 0a ciel sous
+  le décor : mer PSP en anneaux découpés (tuiles de 3 unités près de la caméra, jusqu'à ±1536). 0d panneaux
+  flèches : matrice de texture et animation `.na` portées (couleurs qui défilent dans le sens de la flèche).
+- HUD : documentation (format des cellules 2D, objets du HUD), noms, plus les panneaux translucides sous la
+  vitesse, les tours et les temps intermédiaires (exacts au texel).
+- Ombre de la voiture : volume d'ombre au stencil sur les deux back-ends, comme le DS (masque puis ombre).
+- Correctif hôte trouvé par check_culling (coordonnée de texture qui fuyait entre modèles).
+
+Vérifications à chaque étape : hôte et PSP sans avertissement, 114 vérifications à 0 erreur, 114 dumps PSP
+identiques, culling 0 différence (26 pistes x 3), race_shot hard/0 600 et easy/0 150 identiques à l'hôte,
+32 rechargements à tas constant.
+
+**Prochaine étape = test console** (copier `build\psp\package\PSP`) : voir la note phase5-run3.md. Ensuite :
+messages du HUD (table caractères -> cellules des polices), son, fond de mer animé.
+
 ## Bilan de la phase 5, run 1 (rapport, 2026-10-19)
 
 **Priorités 1 et 2 terminées, priorité 3 en partie.** Tout est vérifié dans PPSSPP et sur l'hôte ; la vitesse et
