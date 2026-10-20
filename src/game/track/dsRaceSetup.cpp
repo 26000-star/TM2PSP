@@ -3,6 +3,8 @@
 #include "math/dsMath.h"
 
 static const char *const s_envNames[ENV_COUNT] = {"sta", "isl", "sno", "coa"};          // 0x020c11f8
+// 0x020c1218: the environments' long names
+static const char *const s_envLongNames[ENV_COUNT] = {"stadiumGrass", "islandSea", "snowSnow", "coastSea"};
 static const char *const s_todNames[3] = {"rise", "day", "set"};                       // 0x020c11ec
 static const char *const s_difficultyNames[5] = {"practice", "easy", "medium", "hard", "extreme"}; // 0x020c123c
 // 0x020b8fcc: grid size in cells, 3 bytes per environment
@@ -40,6 +42,8 @@ void dsRaceSetup::GridSize(u32 *x, u32 *y, u32 *z) const
 
 // @port main:020a11f0 done
 const char *dsRaceSetup::EnvironmentName() const { return s_envNames[environment]; }
+// @port main:020a11dc done
+const char *dsRaceSetup::EnvironmentLongName() const { return s_envLongNames[environment]; }
 // @port main:020a11b8 done
 const char *dsRaceSetup::TimeOfDayName() const { return s_todNames[timeOfDay]; }
 // @port main:020a11a4 done

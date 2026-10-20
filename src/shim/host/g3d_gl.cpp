@@ -197,6 +197,36 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
     glDisable(GL_FOG);
 }
 
+void G3Model::DrawQuads(int texture, const G3QuadVertex *v, int quads, u16 rgb555, bool fog, const float *) const
+{
+    const G3Texture *tex = texture >= 0 && texture < (int)textures.size() ? &textures[texture] : nullptr;
+    float tw = 0, th = 0;
+    if (tex && tex->gl) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex->gl);
+        tw = 1.0f / (16.0f * tex->w);
+        th = 1.0f / (16.0f * tex->h);
+    } else {
+        glDisable(GL_TEXTURE_2D);
+    }
+    glDisable(GL_CULL_FACE);
+    if (fog)
+        glEnable(GL_FOG);
+    bool translucent = tex && tex->translucent;
+    if (translucent)
+        glDepthMask(GL_FALSE);
+    glColor4f((rgb555 & 31) / 31.0f, ((rgb555 >> 5) & 31) / 31.0f, ((rgb555 >> 10) & 31) / 31.0f, 1);
+    glBegin(GL_QUADS);
+    for (int k = 0; k < quads * 4; k++) {
+        glTexCoord2f(v[k].s * tw, v[k].t * th);
+        glVertex3fv(v[k].pos);
+    }
+    glEnd();
+    if (translucent)
+        glDepthMask(GL_TRUE);
+    glDisable(GL_FOG);
+}
+
 // @port itcm:01ffc7a4 partial (the two passes with the stencil buffer; the DS polygon-ID rules are approximated:
 // a shadow pixel is drawn once, then its stencil is cleared)
 void G3Model::DrawShadowVolume(u16 rgb555, int alpha) const

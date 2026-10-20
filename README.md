@@ -235,8 +235,9 @@ folder to the root of a memory stick (custom firmware needed). Real-hardware spe
   against the record, clock), the car's brake and reverse lights, the arrow signs' scrolling texture animation.
   The HUD's backing panels and the car's black shadow volume (stencil) too; the car is lit with colour set 0 and the
   track with set 1, as the game's model flags say. The HUD's text messages ("free wheeling", checkpoints missed)
-  with the game's fonts, text layout and localised strings (console language). Still to do: the animated sea
-  backdrop and the sound.
+  with the game's fonts, text layout and localised strings (console language). The sea as the game draws it: 5 x 5
+  translucent textured quads in world space with their scrolling texture, lowered as the camera rises (cut into a
+  quadtree around the eye on the PSP for the GE's guard band). Still to do: the sound.
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/psp/reload_test.ps1

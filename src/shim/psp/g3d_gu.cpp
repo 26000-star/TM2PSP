@@ -239,6 +239,24 @@ GuTex *MakeTexture(const G3Texture &t)
     return g;
 }
 
+// Selects a back-end texture (none: texturing off).
+void BindTexture(const G3Texture *tex)
+{
+    if (!tex || !tex->gu) {
+        sceGuDisable(GU_TEXTURE_2D);
+        return;
+    }
+    const GuTex *g = (const GuTex *)tex->gu;
+    sceGuEnable(GU_TEXTURE_2D);
+    if (g->clut) {
+        sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+        sceGuClutLoad(g->clutBlocks, g->clut);
+    }
+    sceGuTexMode(g->psm, 0, 0, GU_TRUE);
+    sceGuTexImage(0, g->w, g->h, g->tbw, g->data);
+    sceGuTexWrap(g->repeatS ? GU_REPEAT : GU_CLAMP, g->repeatT ? GU_REPEAT : GU_CLAMP);
+}
+
 // Display list -> triangle list with the material colour baked in.
 struct GuSink : G3ShapeSink {
     std::vector<GuVertex> out, prim;
@@ -518,20 +536,8 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                 src = nullptr;
             }
             otherPass = (alpha < 1.0f || (tex && tex->translucent)) != (pass == 1);
-            if (!draw || otherPass) {
-            } else if (tex && tex->gu) {
-                const GuTex *g = (const GuTex *)tex->gu;
-                sceGuEnable(GU_TEXTURE_2D);
-                if (g->clut) {
-                    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
-                    sceGuClutLoad(g->clutBlocks, g->clut);
-                }
-                sceGuTexMode(g->psm, 0, 0, GU_TRUE);
-                sceGuTexImage(0, g->w, g->h, g->tbw, g->data);
-                sceGuTexWrap(g->repeatS ? GU_REPEAT : GU_CLAMP, g->repeatT ? GU_REPEAT : GU_CLAMP);
-            } else {
-                sceGuDisable(GU_TEXTURE_2D);
-            }
+            if (draw && !otherPass)
+                BindTexture(tex);
             break;
         case 2: {
             if (o.a >= (int)shapes.size() || skip || otherPass)
@@ -660,6 +666,162 @@ void G3GuSetVram(void *base, size_t size)
     g_vramSize = size;
 }
 size_t G3GuMeshBytes() { return g_meshBytes; }
+
+namespace {
+
+// DrawQuads vertex, 16 bytes: raw DS texture coordinates (scaled by sceGuTexScale as the meshes'), world position.
+struct GuQuadVertex {
+    s16 u, v;
+    float x, y, z;
+};
+const int GU_QUAD_VTYPE = GU_TEXTURE_16BIT | GU_VERTEX_32BITF | GU_TRANSFORM_3D;
+int g_quadVertices;            // vertices of the last DrawQuads (race log)
+const int QUAD_MAX_VERTICES = 8192; // per DrawQuads (128 KB, then as much display list); further cells left out
+GuQuadVertex g_quadBuffer[QUAD_MAX_VERTICES];
+
+// Quadtree over a quad (a parallelogram, as the sea's: a split averages the corners). A cell is skipped when its
+// corners are all outside one plane of the view frustum (clip coordinates, averaged as the positions), and split
+// while larger than minSize and closer to the eye than 4 times its size (3D distance to its bounds): a visible
+// triangle then keeps its vertices within about 5 times its visible depth sideways, inside the GE's guard band
+// (+-2048 pixels: 8.5 times the depth at the PSP's FOV). Near the eye this gives 3-unit cells within 12 units, as
+// the earlier rings did.
+struct QuadSplitter {
+    struct V {
+        float p[3], s, t, c[4];    // position, texture coordinates, clip coordinates
+        int code;                  // outside the clip planes (bits: -x +x -y +y -z +z)
+    };
+    ScePspFMatrix4 clip;           // projection x view x model
+    float eye[3], minSize;
+    GuQuadVertex *out;
+    int count, capacity;
+    void Clip(V &v) const
+    {
+        const float *m = &clip.x.x;
+        for (int k = 0; k < 4; k++)
+            v.c[k] = m[k] * v.p[0] + m[4 + k] * v.p[1] + m[8 + k] * v.p[2] + m[12 + k];
+        Code(v);
+    }
+    static void Code(V &v)
+    {
+        float w = v.c[3];
+        v.code = (v.c[0] < -w) | (v.c[0] > w) << 1 | (v.c[1] < -w) << 2 | (v.c[1] > w) << 3 | (v.c[2] < -w) << 4 |
+                 (v.c[2] > w) << 5;
+    }
+    static void Mid(V &m, const V &a, const V &b)
+    {
+        for (int k = 0; k < 3; k++)
+            m.p[k] = (a.p[k] + b.p[k]) * 0.5f;
+        m.s = (a.s + b.s) * 0.5f;
+        m.t = (a.t + b.t) * 0.5f;
+        for (int k = 0; k < 4; k++)
+            m.c[k] = (a.c[k] + b.c[k]) * 0.5f;
+        Code(m);
+    }
+    static s16 Round(float f) { return (s16)(int)(f < 0 ? f - 0.5f : f + 0.5f); }
+    // h: half extents of the cell's bounds (a parallelogram's: half the sum of its edges' absolute components).
+    void Cell(const V &c0, const V &c1, const V &c2, const V &c3, const float *h, int depth)
+    {
+        if (c0.code & c1.code & c2.code & c3.code)
+            return;
+        float size = 2 * (h[0] > h[1] ? (h[0] > h[2] ? h[0] : h[2]) : (h[1] > h[2] ? h[1] : h[2])), d2 = 0;
+        for (int k = 0; k < 3; k++) {
+            float d = fabsf((c0.p[k] + c2.p[k]) * 0.5f - eye[k]) - h[k];
+            if (d > 0)
+                d2 += d * d;
+        }
+        if (depth < 12 && size > minSize && d2 < 16 * size * size) {
+            V m01, m12, m23, m30, m;
+            Mid(m01, c0, c1);
+            Mid(m12, c1, c2);
+            Mid(m23, c2, c3);
+            Mid(m30, c3, c0);
+            Mid(m, m01, m23);
+            float hh[3] = {h[0] * 0.5f, h[1] * 0.5f, h[2] * 0.5f};
+            Cell(c0, m01, m, m30, hh, depth + 1);
+            Cell(m01, c1, m12, m, hh, depth + 1);
+            Cell(m, m12, c2, m23, hh, depth + 1);
+            Cell(m30, m, m23, c3, hh, depth + 1);
+            return;
+        }
+        if (count + 6 > capacity)
+            return;
+        // The texture coordinates are averages of s16 values: in range, rounded to the nearest.
+        GuQuadVertex q[4] = {{Round(c0.s), Round(c0.t), c0.p[0], c0.p[1], c0.p[2]},
+                             {Round(c1.s), Round(c1.t), c1.p[0], c1.p[1], c1.p[2]},
+                             {Round(c2.s), Round(c2.t), c2.p[0], c2.p[1], c2.p[2]},
+                             {Round(c3.s), Round(c3.t), c3.p[0], c3.p[1], c3.p[2]}};
+        GuQuadVertex *o = out + count;
+        o[0] = q[0];
+        o[1] = q[1];
+        o[2] = q[2];
+        o[3] = q[0];
+        o[4] = q[2];
+        o[5] = q[3];
+        count += 6;
+    }
+};
+
+} // namespace
+
+void G3Model::DrawQuads(int texture, const G3QuadVertex *v, int quads, u16 rgb555, bool fog, const float *eye) const
+{
+    if (g_prepareOnly)
+        return;
+    const G3Texture *tex = texture >= 0 && texture < (int)textures.size() ? &textures[texture] : nullptr;
+    BindTexture(tex);
+    if (tex && tex->gu) {
+        const GuTex *g = (const GuTex *)tex->gu;
+        sceGuTexScale(32768.0f / (16.0f * tex->w) * g->su, 32768.0f / (16.0f * tex->h) * g->sv);
+        sceGuTexOffset(0, 0);
+    }
+    sceGuDisable(GU_CULL_FACE);
+    if (fog)
+        sceGuEnable(GU_FOG);
+    bool translucent = tex && tex->translucent;
+    if (translucent)
+        sceGuDepthMask(GU_TRUE);
+    u32 r = (rgb555 & 31) * 255 / 31, g = ((rgb555 >> 5) & 31) * 255 / 31, b = ((rgb555 >> 10) & 31) * 255 / 31;
+    sceGuColor(0xff000000 | b << 16 | g << 8 | r);
+    QuadSplitter sp;
+    ScePspFMatrix4 proj, view, model, pv;
+    sceGumMatrixMode(GU_PROJECTION);
+    sceGumStoreMatrix(&proj);
+    sceGumMatrixMode(GU_VIEW);
+    sceGumStoreMatrix(&view);
+    sceGumMatrixMode(GU_MODEL);
+    sceGumStoreMatrix(&model);
+    gumMultMatrix(&pv, &proj, &view);
+    gumMultMatrix(&sp.clip, &pv, &model);
+    for (int k = 0; k < 3; k++)
+        sp.eye[k] = eye[k];
+    sp.minSize = guardEdge;
+    sp.out = g_quadBuffer;
+    sp.count = 0;
+    sp.capacity = QUAD_MAX_VERTICES;
+    for (int k = 0; k < quads; k++) {
+        QuadSplitter::V c[4];
+        for (int i = 0; i < 4; i++) {
+            const G3QuadVertex &q = v[4 * k + i];
+            c[i] = {{q.pos[0], q.pos[1], q.pos[2]}, (float)q.s, (float)q.t, {}, 0};
+            sp.Clip(c[i]);
+        }
+        float h[3];
+        for (int i = 0; i < 3; i++)
+            h[i] = (fabsf(c[1].p[i] - c[0].p[i]) + fabsf(c[3].p[i] - c[0].p[i])) * 0.5f;
+        sp.Cell(c[0], c[1], c[2], c[3], h, 0);
+    }
+    if (sp.count) {
+        GuQuadVertex *dl = (GuQuadVertex *)sceGuGetMemory(sizeof(GuQuadVertex) * sp.count);
+        memcpy(dl, g_quadBuffer, sizeof(GuQuadVertex) * sp.count);
+        sceGumDrawArray(GU_TRIANGLES, GU_QUAD_VTYPE, sp.count, nullptr, dl);
+    }
+    g_quadVertices = sp.count;
+    if (translucent)
+        sceGuDepthMask(GU_FALSE);
+    sceGuDisable(GU_FOG);
+}
+
+int G3GuQuadVertices() { return g_quadVertices; }
 
 // @port itcm:01ffc7a4 partial (as the host: two passes with the stencil, which the GE keeps in the alpha bits of the
 // 8888 frame buffer; RGB writes are masked during the mask pass)

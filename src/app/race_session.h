@@ -13,6 +13,7 @@
 #include "car/dsCarParams.h"
 #include "g2d_cells.h"
 #include "g3d_model.h"
+#include "gfx/dsSeaBackdrop.h"
 #include "hud/dsHud.h"
 #include "race/dsChaseCamera.h"
 #include "race/dsRaceProgress.h"
@@ -31,6 +32,9 @@ struct RaceSession {
     G3Model *wheelModels[2] = {}; // Cars/<env>/lwheel (wheels 0, 2) and rwheel (1, 3), ov003 0x020fd914
     G3Model *shadowModel = nullptr; // Cars/<env>/shadow, a shadow volume (ov003 0x020fd914, car visual +0x10)
     float skyScale[3] = {1, 1, 1};
+    // The sea (dsSeaBackdrop) and the model holding its texture, misc/<long environment name>/<same>; none: no sea.
+    G3Model *seaModel = nullptr;
+    dsSeaBackdrop sea;
     // DS lighting and fog of the track's time of day (Scripts/config/tracks, see BuildLighting); off: the
     // material colours as before (tm_race --unlit).
     G3LightEnv lightEnv;
@@ -79,6 +83,10 @@ struct RaceSession {
         bool lit;
     };
     int CarDraws(Draw *out) const; // up to 5
+    // The sea's quads for the current camera (dsSeaBackdrop::QUADS x 4 vertices, world units) and their colour, for
+    // seaModel->DrawQuads with its texture 0 (fog: lightEnv.fog when lit). The drivers draw them after the track
+    // and the shadow, before the car (the DS draws translucent polygons after the opaque ones). False: no sea.
+    bool SeaDraw(G3QuadVertex *v, u16 *rgb555) const;
     void Respawn() { progress->Reset(false); }
     void Restart() { progress->Reset(true); }
     void ToggleCamera()

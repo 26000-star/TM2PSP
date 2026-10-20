@@ -33,3 +33,20 @@ itcm:01ffc994 dsModel_Draw
 main:0205600c dsModel_Load
 main:02019710 dsStr_Find
 main:02045904 dsResName_Normalize
+
+# ---- step 5d: the sea (custom scene node, drawer in the race environment +0x88) ----
+main:020a11dc dsRaceSetup_EnvironmentLongName
+main:0206e814 dsCustomNode_ctor
+main:0206e738 dsCustomNode_GetDrawer
+main:020589f4 dsScene_AddNode
+main:02058740 dsScene_SortNodes
+main:02054a28 dsCamera_ctor
+ov003:0213079c dsSeaDrawer_ctor
+ov003:02130740 dsSeaDrawer_dtor
+ov003:021306dc dsSeaDrawer_dtor_delete
+ov003:021306d4 dsSeaDrawer_HasDraw
+itcm:01fffbd0 dsSeaDrawer_Update
+itcm:01fff8cc dsSeaDrawer_Draw
+itcm:01ffcf3c dsScene_DrawCustomNodes
+itcm:01ffddd4 dsTexture_Bind
+itcm:01ffe0cc dsTexture_ctor

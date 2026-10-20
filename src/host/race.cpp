@@ -156,15 +156,6 @@ static void DrawRace(RaceSession &race, int w, int h)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-    // Sea at the Coast sea level (2.5).
-    glDisable(GL_TEXTURE_2D);
-    glColor3f(0.15f, 0.35f, 0.6f);
-    glBegin(GL_QUADS);
-    glVertex3f(-500, 2.5f, -500);
-    glVertex3f(-500, 2.5f, 800);
-    glVertex3f(800, 2.5f, 800);
-    glVertex3f(800, 2.5f, -500);
-    glEnd();
     float g[16];
     race.Cull((float)w / h, n, f);
     drawnPieces = 0;
@@ -192,6 +183,11 @@ static void DrawRace(RaceSession &race, int w, int h)
         race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
         glPopMatrix();
     }
+    // The sea (itcm 0x01fff8cc): translucent, over the track, under the car.
+    G3QuadVertex sea[dsSeaBackdrop::QUADS * 4];
+    u16 seaColor;
+    if (race.SeaDraw(sea, &seaColor))
+        race.seaModel->DrawQuads(0, sea, dsSeaBackdrop::QUADS, seaColor, race.lighting && race.lightEnv.fog, eye);
     RaceSession::Draw cd[5];
     for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
         glPushMatrix();

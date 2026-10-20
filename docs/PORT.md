@@ -665,7 +665,7 @@ Found in the code (names in `config/names/phase5_render.txt`):
 - Renderer init (main 0x0204f528): shininess table `(2i+1)^9 / 256^8`, fog table 0, 4, ... 124 over 32 entries,
   `SWAP_BUFFERS = 2` (W-buffering); every frame (itcm 0x01ff9628) `G3X_SetFog(on, mode 0, 1, 0x60)`.
 - The sky is a model, `Sky/<env>/sky_<rise|day|set>` (ov003 0x0211de20), scaled (7987, 6349, 7987) / 4096 on Coast;
-  the same function creates `Misc/CoastSea/CoastSea` (the animated sea, not ported yet).
+  the same function creates the animated sea (ported in step 5d).
 
 Port (common code, identical on both back-ends): `G3LightEnv` / `G3ResolveMaterial` / `G3LightVertex`
 (`g3d_model.*`) implement the DS equation (GBATEK: emission + sum of light x (specular x shininess + diffuse x
@@ -816,6 +816,69 @@ does). The host's red stand-in text for missed checkpoints is gone. Checks: `tm_
 checkpoints." on two lines (289 pixels > 252) and "Roue libre !"; the PSP heap grows by 0.6 MB (two 256 x 512
 16-bit atlases and the strings).
 
+### Step 5d: the sea (done; console test pending)
+
+The sea is not a model. `dsRaceEnv_LoadSky` (ov003 0x0211de20), after the sky dome, builds the name `misc/%s/%s`
+from `dsRaceSetup_EnvironmentLongName` (main 0x020a11dc, table 0x020c1218: stadiumGrass, islandSea, snowSnow,
+coastSea) and creates:
+
+- a **drawer** (`dsSeaDrawer_ctor`, ov003 0x0213079c, 0x3c bytes, vtable 0x021373b8, kept at race environment
+  +0x88): +0x14 speed 0x11f on Island and Coast (0 elsewhere), +0x18 phase 0, +0x1c height (Coast 0x2800 = 2.5,
+  Island -16219 = -3.96: the car's sea levels), +0x20 scale 2 on Island and Coast (else 1), +0x24..+0x30 the race
+  environment's +0x44..+0x50, i.e. **colour 4 of `Scripts/config/tracks`** (the one step 3a found unused: coa set
+  (3686, 3317, 3276) -> COLOR 0x633b, coa rise 0x775f, nearly white);
+- a **custom scene node** (`dsCustomNode_ctor`, main 0x0206e814, 0x40 bytes, node type 4) with the drawer at +0x18,
+  the resource handle of `misc/coastSea/coastSea` at +0x14 (renderer vtable +0x88 / +0xec load its texture and
+  palette), position 0, scale 1, draw order +0x08 = 4 (the sky 0xb, models 0x10; `dsScene_SortNodes` main
+  0x02058740 sorts the nodes by it) and +0x34 = 1: `dsRenderer_Frame` draws it at once through
+  `dsScene_DrawCustomNodes` (itcm 0x01ffcf3c) instead of queueing it.
+
+`dsScene_DrawCustomNodes` resets the NNS base matrix (identity rotation, no translation, unit scale) and loads the
+camera, sets the texture matrix to identity, then per node: DIF_AMB = SPE_EMI = 0, MTX_PUSH, the node's translation
+and scale, the texture (`dsTexture_Bind` itcm 0x01ffddd4: TEXIMAGE_PARAM with repeat S and T, texture coordinates
+through the texture matrix), the drawer's vtable +0x0c, MTX_POP. **The drawer (`dsSeaDrawer_Draw`, itcm 0x01fff8cc)**
+pops that matrix (back to the camera's: world space) and sends straight to the geometry engine:
+
+- POLYGON_ATTR 0x001f80c0 (no light, modulation, both faces, fog, alpha 31, ID 0), COLOR = each colour channel / 132;
+- for i, j = 0..4: MTX_PUSH, MTX_SCALE(2 x 0x10002 = 32.001, 1, 32.001), MTX_TRANS(-12 + 16 i, ty, -12 + 16 j)
+  (steps 0xfffc; the translation is scaled), one quad of VTX_16 (+-7.9995, -0.9497, +-7.9995), MTX_POP; a final
+  MTX_PUSH balances the node's pop. So **5 x 5 tiles of 512 units from -640 to 1920 in x and z**, fixed in the world
+  (the Coast track's cells span 0..352): the sea reaches past the far plane from anywhere on the track (the
+  default camera, `dsCamera_ctor` main 0x02054a28, has near 0.1 and far 400).
+- **Height:** ty = 0.975 + height - clamp((camera y - 2.4) / 4, 0, 2) (camera y: the scene camera's matrix
+  translation, +0x28 -> +0x50), so the surface lies at 2.525 on Coast while the camera is below 2.4 and **goes down
+  as the camera rises**, by a quarter of its height, at most 2 units (0.525 from 10.4 up).
+- **Texture coordinates:** a = (phase + 0x900000) >> 8, b = phase >> 8, kept in 16 bits: (a, b) at (-x, +z),
+  (a, a) at (-x, -z), (b, a) at (+x, -z), (b, b) at (+x, +z). b - a = 28672 (1/16 texel) = 14 repeats of the
+  128-texel texture across a tile, continuous from tile to tile, the same function for s along x and t along z; then
+  phase += speed: a **diagonal scroll** of 287 / 4096 texel per draw (one texture every 61 s at 30 draws per
+  second). After about 29,000 draws b wraps alone and the tiles take 18 repeats the other way until a wraps too
+  (about 16 to 30 minutes into a race; kept).
+- **Texture:** `islandsea` of Graphics/Misc/CoastSea/CoastSea.n, 128 x 128 **A5I3** (8 light blue-grey colours,
+  alpha 15..27 / 31). An A5I3 texture makes the DS draw the quads as **translucent polygons** (after the opaque
+  ones, without depth update: POLYGON_ATTR bit 11 clear): the sky dome below the horizon and the terrain under the
+  water (cliff bases, beaches) show through. The file's own model (one tilted quad, material "cowboy1") is never
+  drawn: the "tilted quad whose placement is not understood" of run 1 is not the sea surface.
+
+Port: `dsSeaBackdrop` (`src/game/gfx`, common code: `Init` = the constructor and the fields set by LoadSky, `Quads`
+= the draw's 100 vertices and 16-bit texture coordinates, `Color`, `Advance`), `dsRaceSetup::EnvironmentLongName`,
+`RaceSession::seaModel` (texture forced to repeat, as TEXIMAGE_PARAM) and `SeaDraw`, and `G3Model::DrawQuads` on
+both back-ends: the host draws the 25 GL quads; the PSP cuts each tile into a quadtree (one draw call, 16-byte
+vertices with the DS's s16 texture coordinates and float positions, a static buffer of 8,192 vertices): cells whose
+corners are all outside one frustum plane are left out (clip coordinates averaged along with the positions), cells
+larger than `guardEdge` (3) are split while their 3D distance to the eye is under 4 times their size, so a visible
+triangle keeps its vertices within about 5 times its depth sideways (the guard band is +-2048 pixels, 8.5 times the
+depth at the PSP's FOV; a factor 3 would allow 13). The phase advances once per `RaceSession::Frame` (the game: at
+each draw, once per 30 Hz frame), so the image does not depend on how often a driver draws. Both drivers draw the
+sea after the track and the car's shadow volume and before the car (deviations: the track's own translucent polygons
+are drawn before it instead of being sorted with it, and a sinking car is drawn over it). The host's flat blue quad
+at 2.5 and the PSP's untextured rings (bug 0a of run 3) are gone.
+
+Checks: host and PPSSPP shots (easy/0 150 frames, hard/0 600) show the same textured sea; car and camera identical
+to the host; 114 checks, 0 errors; reload test (32 loads) constant (heap 891,144 bytes after every unload from the
+3rd on, textures and meshes 0); `check_culling.py` 0 differences (26 tracks x 3). PPSSPP, easy/0: 1,644 sea vertices (26 KB of list; hard/0 1,710), GE list build
+5.3 -> 6.1 ms per frame (the earlier rings: 3,136 untextured vertices); heap unchanged.
+
 ### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
 
 - **0c, boosters pushing sideways** (`dsTrack::PieceRotationAt`, game logic): main 0x0208cb80 adds half a cell to x
@@ -861,7 +924,7 @@ checkpoints." on two lines (289 pixels > 252) and "Roue libre !"; the PSP heap g
 ### Not done in run 3: HUD messages, sound, sea backdrop (findings for the next run)
 
 (The HUD messages are done in step 5c, which corrects two points below: the character map is in config/ui, and
-the backing's panel +0x14 belongs to another HUD part.)
+the backing's panel +0x14 belongs to another HUD part. The sea is done in step 5d.)
 
 - **HUD messages** (+0x3c, update 0x021097d4, show 0x02109658 / by key 0x02109778): three text objects of the
   game's text engine (main 0x0208547c(font manager *0x020d35cc, text, x 128, y 102, ..., width 252): +0x0c font 0

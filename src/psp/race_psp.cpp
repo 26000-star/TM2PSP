@@ -40,6 +40,7 @@ size_t G3GuTextureBytes();
 size_t G3GuMeshBytes();
 size_t G3GuVramBytes();
 int G3GuClampedVertices();
+int G3GuQuadVertices();
 void G3GuSetVram(void *base, size_t size);
 
 namespace {
@@ -155,50 +156,6 @@ void DrawText(float x, float y, float px, const char *s, float r, float g, float
     sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, (int)(o - v), nullptr, v);
 }
 
-struct SeaVertex {
-    u32 color;
-    float x, y, z;
-};
-
-// Sea at the Coast sea level (2.5), as on the host (a flat colour). The GE drops a whole triangle when a vertex
-// projects out of its guard band, as the track pieces showed (split to 3-unit edges, G3_GU_MAX_EDGE): the sea is
-// drawn as nested square rings around the eye, ring L covering +-24 x 2^L units with tiles of 3 x 2^L (3 units
-// within at least 18 units of the eye; ring 6: 192-unit tiles, +-1536 units, past the 600-unit far plane), each
-// ring skipping the square of the ring inside it. Rows are triangle strips. (Before: 24 x 24 tiles of 24 units,
-// +-288 units: tiles near the camera were dropped on the PSP-3000 and the sky showed below the horizon past 288
-// units.)
-void DrawSea(float cx, float cz)
-{
-    const int RINGS = 7, N = 16; // tiles per side of a ring; the ring inside covers 8 x 8 of them
-    u32 c = 0xff000000 | (u32)(0.6f * 255) << 16 | (u32)(0.35f * 255) << 8 | (u32)(0.15f * 255);
-    sceGuDisable(GU_TEXTURE_2D);
-    for (int ring = 0; ring < RINGS; ring++) {
-        float t = 3.0f * (float)(1 << ring);
-        // Ring origin on a 2t grid; the inner ring (tile t / 2) starts at floor(c / t) * t - 4t, which is on this
-        // ring's t grid, 4 or 5 tiles in: its square is skipped exactly.
-        int kx = (int)floorf(cx / (2 * t)), kz = (int)floorf(cz / (2 * t));
-        float x0 = (kx * 2 - N / 2) * t, z0 = (kz * 2 - N / 2) * t;
-        int hx = (int)floorf(cx / t) - 2 * kx + 4, hz = (int)floorf(cz / t) - 2 * kz + 4;
-        for (int j = 0; j < N; j++) {
-            bool holeRow = ring > 0 && j >= hz && j < hz + 8;
-            // One strip for the whole row, or the parts left and right of the inner ring.
-            int spans[2][2] = {{0, holeRow ? hx : N}, {hx + 8, N}};
-            for (int sp = 0; sp < (holeRow ? 2 : 1); sp++) {
-                int a = spans[sp][0], b = spans[sp][1];
-                int n = (b - a + 1) * 2;
-                SeaVertex *v = (SeaVertex *)sceGuGetMemory(sizeof(SeaVertex) * n);
-                float za = z0 + j * t, zb = za + t;
-                for (int i = a, k = 0; i <= b; i++) {
-                    float x = x0 + i * t;
-                    v[k++] = {c, x, 2.5f, za};
-                    v[k++] = {c, x, 2.5f, zb};
-                }
-                sceGumDrawArray(GU_TRIANGLE_STRIP, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, n, nullptr, v);
-            }
-        }
-    }
-}
-
 void DrawRace(RaceSession &race)
 {
     sceGuClearColor(0xff000000 | (u32)(0.95f * 255) << 16 | (u32)(0.75f * 255) << 8 | (u32)(0.55f * 255));
@@ -246,7 +203,6 @@ void DrawRace(RaceSession &race)
                   (fc & 31) * 255 / 31;
         sceGuFog(race.lightEnv.fogStart, race.lightEnv.fogEnd, col);
     }
-    DrawSea(eye.x, eye.z);
     float g[16];
     race.Cull((float)SCR_W / SCR_H, 0.5f, 600.0f);
     g_drawnPieces = 0;
@@ -273,6 +229,13 @@ void DrawRace(RaceSession &race)
         sceGumMultMatrix((const ScePspFMatrix4 *)g);
         race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
         sceGumPopMatrix();
+    }
+    // The sea (itcm 0x01fff8cc): translucent, over the track, under the car; cut around the eye for the guard band.
+    G3QuadVertex sea[dsSeaBackdrop::QUADS * 4];
+    u16 seaColor;
+    if (race.SeaDraw(sea, &seaColor)) {
+        const float e[3] = {eye.x, eye.y, eye.z};
+        race.seaModel->DrawQuads(0, sea, dsSeaBackdrop::QUADS, seaColor, race.lighting && race.lightEnv.fog, e);
     }
     RaceSession::Draw cd[5];
     for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
@@ -608,9 +571,11 @@ int main(int argc, char **argv)
             printf("timing frames=%d update=%u us draw=%u us gpu=%u us (averages) max=%u us late=%d\n", frames,
                    (unsigned)(sumUpdate / frames), (unsigned)(sumDraw / frames), (unsigned)(sumGpu / frames),
                    (unsigned)maxFrame, late);
-            printf("memory heap=%u bytes textures=%u (vram %u) meshes=%u (clamped %d) pieces drawn=%d of %d\n",
+            printf("memory heap=%u bytes textures=%u (vram %u) meshes=%u (clamped %d) pieces drawn=%d of %d "
+                   "sea vertices=%d\n",
                    (unsigned)mallinfo().uordblks, (unsigned)G3GuTextureBytes(), (unsigned)G3GuVramBytes(),
-                   (unsigned)G3GuMeshBytes(), G3GuClampedVertices(), g_drawnPieces, (int)race.pieces.size());
+                   (unsigned)G3GuMeshBytes(), G3GuClampedVertices(), g_drawnPieces, (int)race.pieces.size(),
+                   G3GuQuadVertices());
             fflush(stdout);
             g_quit = true;
         }

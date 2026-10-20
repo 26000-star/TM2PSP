@@ -320,6 +320,22 @@ bool RaceSession::Load(const char *trackName)
         skyScale[0] = skyScale[2] = 7987 / 4096.0f;
         skyScale[1] = 6349 / 4096.0f;
     }
+    // The sea: the drawer of ov003 0x0213079c with colour 4 of the race environment and the texture of
+    // misc/<long environment name>/<same> (ov003 0x0211de20); the file's own quad model is not drawn.
+    std::string seaName = setup->EnvironmentLongName();
+    seaModel = own(RaceLoadModel("misc/" + seaName + "/" + seaName, false));
+    if (seaModel && !seaModel->textures.empty()) {
+        G3Texture &t = seaModel->textures[0]; // itcm 0x01ffddd4: repeat S and T, no flip
+        t.repeatS = t.repeatT = true;
+        t.flipS = t.flipT = false;
+        seaModel->Upload();
+        dsTrackLighting tl;
+        if (!tl.Load(setup->EnvironmentName(), setup->TimeOfDayName()))
+            tl.colors[4] = {0, 0, 0};
+        sea.Init(setup->environment, tl.colors[4]);
+    } else {
+        seaModel = nullptr;
+    }
     // Back-end conversion ahead of the race (PSP: vertex arrays with the lit colours of each piece rotation).
     G3DrawLight dl;
     for (size_t k = 0; k < pieces.size(); k++) {
@@ -387,6 +403,23 @@ void RaceSession::Cull(float aspect, float nearZ, float farZ)
     }
 }
 
+bool RaceSession::SeaDraw(G3QuadVertex *v, u16 *rgb555) const
+{
+    if (!seaModel)
+        return false;
+    // The drawer reads the scene camera's height (+0x50 of the camera matrix at +0x28: its position y).
+    dsSeaBackdrop::Vertex q[dsSeaBackdrop::QUADS * 4];
+    sea.Quads(cams[camIndex].matrix.m[3][1], q);
+    for (int k = 0; k < dsSeaBackdrop::QUADS * 4; k++) {
+        for (int i = 0; i < 3; i++)
+            v[k].pos[i] = q[k].pos[i];
+        v[k].s = q[k].s;
+        v[k].t = q[k].t;
+    }
+    *rgb555 = sea.Color();
+    return true;
+}
+
 void RaceSession::Frame(const dsCarInput &in)
 {
     progress->Frame(in, 2);
@@ -403,6 +436,9 @@ void RaceSession::Frame(const dsCarInput &in)
         }
     cams[camIndex].Update(*car); // camera vtable +0x1c, once per frame
     G3SetTexAnimFrame(++texAnimFrame); // material animations: one frame per 30 Hz frame (port choice)
+    // The sea's scroll advances at each of its draws (itcm 0x01fff8cc), once per 30 Hz frame in the race; here
+    // once per frame, so that the image does not depend on how often a driver draws.
+    sea.Advance();
     // The player's update (0x0210ed9c) sets the lights once per 30 Hz frame from the pad and the engine's gear.
     carLights.Update(in.accel > 0, in.brake > 0, car->engine ? car->engine->gear : 0);
     ApplyCarLights();

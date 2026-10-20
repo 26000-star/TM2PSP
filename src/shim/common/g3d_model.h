@@ -43,6 +43,12 @@ struct G3TexSet {
 
 struct G3Lit;
 
+// A vertex of G3Model::DrawQuads: position in the units of the current matrix, raw DS texture coordinates.
+struct G3QuadVertex {
+    float pos[3];
+    s16 s, t;                      // TEXCOORD values (1/16 texel)
+};
+
 // Texture SRT of a material (NNSG3dResMatData texture matrix, or a BTA0/SRT0 material animation): texture
 // coordinates in texture units (1 = the texture's width / height) become s * scale - trans, the Maya convention
 // the game's exporter uses (NNS_G3D texture matrix mode of the models; the sign of the translation is a port
@@ -134,6 +140,13 @@ public:
     // stencil is set and the depth test passes, each pixel once; the stencil is cleared. No depth writes.
     // Back-end file; needs a stencil buffer.
     void DrawShadowVolume(u16 rgb555, int alpha) const;
+    // Quads (4 vertices each) textured with texture `texture` of this model as a custom draw sends them to the
+    // geometry engine (the race's sea, itcm 0x01fff8cc): TEXIMAGE_PARAM repeat S/T, colour rgb555 modulated by
+    // the texture, polygon alpha 31, both faces, fog if `fog`. A texture with partial alpha (A5I3) makes them
+    // translucent: blended, without depth writes. PSP: each quad (a parallelogram) is cut into a quadtree for the
+    // GE's guard band, cells split while larger than guardEdge and within 4 cell sizes of `eye` (3D), cells outside
+    // the view frustum left out. Back-end file.
+    void DrawQuads(int texture, const G3QuadVertex *v, int quads, u16 rgb555, bool fog, const float *eye) const;
     // The model's triangles in model space (node matrices and scales applied), 9 floats each, built once.
     const std::vector<float> &VolumeTriangles() const;
     mutable std::vector<float> volumeTris;

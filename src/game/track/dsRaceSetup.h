@@ -22,6 +22,7 @@ struct dsRaceSetup {
     void GridSize(u32 *x, u32 *y, u32 *z) const;       // 0x0209fcd0: track grid in cells (22 x 20 x 22 on Coast)
 
     const char *EnvironmentName() const;               // 0x020a11f0: "sta" "isl" "sno" "coa"
+    const char *EnvironmentLongName() const;           // 0x020a11dc: "stadiumGrass" "islandSea" "snowSnow" "coastSea"
     const char *TimeOfDayName() const;                 // 0x020a11b8: "rise" "day" "set"
     const char *DifficultyName() const;                // 0x020a11a4: "practice" "easy" "medium" "hard" "extreme"
     static const char *EnvironmentName(s32 env);       // 0x020a1170 (and 0x020a11cc, same table)
