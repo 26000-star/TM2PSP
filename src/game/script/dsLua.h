@@ -29,6 +29,7 @@ public:
     int Count() const;                                // 0x02069300
 
     dsLuaObject Field(const char *name) const;        // 0x02069050
+    dsLuaObject Index(int i) const;                   // 0x020690ac: element i (0-based) of an array
     bool HasField(const char *name) const;            // 0x020692d0
     int FieldNumber(const char *name) const;          // 0x020691e4
     bool FieldBool(const char *name) const;           // 0x02069100

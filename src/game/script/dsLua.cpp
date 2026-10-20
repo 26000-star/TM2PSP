@@ -109,6 +109,18 @@ dsLuaObject dsLuaObject::Field(const char *name) const
     return r;
 }
 
+// @port main:020690ac done
+dsLuaObject dsLuaObject::Index(int i) const
+{
+    lua_rawgeti(m_L, LUA_REGISTRYINDEX, m_ref);
+    lua_rawgeti(m_L, -1, i + 1);
+    dsLuaObject r(m_L);
+    lua_pushvalue(m_L, -1);
+    r.PinTop();
+    lua_settop(m_L, -3);
+    return r;
+}
+
 // @port main:020692d0 done
 bool dsLuaObject::HasField(const char *name) const
 {
