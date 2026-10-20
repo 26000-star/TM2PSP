@@ -1,0 +1,50 @@
+# Names recovered in phase 5 (race sound: the game's sound manager, 3D sources, car audio, and the NitroSystem
+# sound-player calls it makes). Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- NitroSystem sound player (NNS_Snd, main 0x020863fc..0x02088cbc; replaced by src/shim/common/snd_driver) ----
+02086d64 NNS_SndMain
+02087340 NNSi_SndPlayerAllocSeqPlayer
+02087498 NNSi_SndPlayerMain
+020876cc NNS_SndPlayerSetTempoRatio
+020876e4 NNS_SndPlayerSetTrackPan
+020876fc NNS_SndPlayerSetTrackPitch
+02087714 NNS_SndPlayerSetTrackVolume
+02087738 NNS_SndPlayerSetChannelPriority
+02087750 NNS_SndPlayerSetPlayerPriority
+020877f0 NNS_SndPlayerMoveVolume
+0208784c NNS_SndPlayerPause
+02087874 NNS_SndPlayerStopSeq
+02088adc NNS_SndArcPlayerStartSeqArc
+02088b34 NNS_SndArcPlayerStartSeq
+
+# ---- the game's sound manager (*0x020c8e88, vtable 0x020bd5a8; handles: type << 28 | slot << 20 | serial) ----
+0205ea98 dsSoundManager_ctor
+0205e9c0 dsSoundManager_dtor_deleting
+0205ea30 dsSoundManager_dtor
+0205e42c dsSoundManager_LoadArchive
+0205e364 dsSoundManager_LoadArchiveMem
+0205e124 dsSoundManager_Unload
+0205de70 dsSoundManager_LoadByName
+0205ddd0 dsSoundManager_PopState
+0205ddb0 dsSoundManager_PopAllStates
+0205dba0 dsSoundManager_PlaySe
+0205da38 dsSoundManager_PlayMusic
+0205dcb0 dsSoundManager_PlayWave
+0205d898 dsSoundManager_Stop
+0205d7c4 dsSoundManager_StopAll
+0205d76c dsSoundManager_PauseAll
+0205d70c dsSoundManager_ResumeAll
+0205d66c dsSoundManager_SetPan
+0205d620 dsSoundManager_SetVolume
+0205d5b8 dsSoundManager_SetPitch
+0205d564 dsSoundManager_SetTempo
+0205d45c dsSoundManager_IsPlaying
+0205d3fc dsSoundManager_IsValid
+0205d3f4 dsSoundManager_InvalidHandle
+0205e5c8 dsSoundManager_SetOutputMode
+0205e570 dsSoundManager_SetSeVolume
+0205e518 dsSoundManager_SetMusicVolume
+0205d1f8 dsSoundManager_Update
+0205d31c dsSoundManager_AllocSlot
+0205d4c0 dsSoundManager_ApplyVolume
+0205df58 dsSoundManager_AddSeqArc

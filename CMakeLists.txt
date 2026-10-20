@@ -28,9 +28,11 @@ target_compile_options(tm_lua PUBLIC -include ${CMAKE_CURRENT_SOURCE_DIR}/src/li
 # ---- src/shim: NitroSDK replacement ----
 add_library(tm_shim STATIC
   src/shim/common/fx.c
+  src/shim/common/snd_sdat.cpp
+  src/shim/common/snd_driver.cpp
   src/shim/${TM_PLATFORM}/fs_${TM_PLATFORM}.c
   src/shim/${TM_PLATFORM}/os_${TM_PLATFORM}.c)
-target_include_directories(tm_shim PUBLIC src/shim/include)
+target_include_directories(tm_shim PUBLIC src/shim/include src/shim/common)
 if(NOT WIN32)
   target_link_libraries(tm_shim PUBLIC m)
 endif()
@@ -84,10 +86,13 @@ if(TM_PLATFORM STREQUAL host)
   target_link_libraries(tm_trackdump PRIVATE tm_game)
   add_executable(tm_physics src/host/physicstest.cpp)
   target_link_libraries(tm_physics PRIVATE tm_game)
+  add_executable(tm_sdat src/host/sdat.cpp)
+  target_link_libraries(tm_sdat PRIVATE tm_shim)
   if(WIN32)
     target_link_options(tm_cfgdump PRIVATE -static)
     target_link_options(tm_trackdump PRIVATE -static)
     target_link_options(tm_physics PRIVATE -static)
+    target_link_options(tm_sdat PRIVATE -static)
     target_link_options(tm_checksuite PRIVATE -static)
   endif()
 
