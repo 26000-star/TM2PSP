@@ -660,3 +660,40 @@ void G3GuSetVram(void *base, size_t size)
     g_vramSize = size;
 }
 size_t G3GuMeshBytes() { return g_meshBytes; }
+
+// @port itcm:01ffc7a4 partial (as the host: two passes with the stencil, which the GE keeps in the alpha bits of the
+// 8888 frame buffer; RGB writes are masked during the mask pass)
+void G3Model::DrawShadowVolume(u16 rgb555, int alpha) const
+{
+    const std::vector<float> &t = VolumeTriangles();
+    if (t.empty() || g_prepareOnly)
+        return;
+    int n = (int)t.size() / 3;
+    float *v = (float *)sceGuGetMemory(sizeof(float) * t.size());
+    memcpy(v, t.data(), sizeof(float) * t.size());
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_FOG);
+    sceGuDepthMask(GU_TRUE);
+    sceGuClearStencil(0);
+    sceGuClear(GU_STENCIL_BUFFER_BIT);
+    sceGuEnable(GU_STENCIL_TEST);
+    // Mask: back faces only (the GE keeps the faces wound as the front face, so the winding is swapped).
+    sceGuPixelMask(0x00ffffff);
+    sceGuColor(0xff000000); // opaque for the alpha test
+    sceGuEnable(GU_CULL_FACE);
+    sceGuFrontFace(GU_CW);
+    sceGuStencilFunc(GU_ALWAYS, 1, 1);
+    sceGuStencilOp(GU_KEEP, GU_REPLACE, GU_KEEP);
+    sceGumDrawArray(GU_TRIANGLES, GU_VERTEX_32BITF | GU_TRANSFORM_3D, n, nullptr, v);
+    // Shadow: both faces where the stencil is set and the depth test passes, once per pixel.
+    sceGuPixelMask(0);
+    sceGuDisable(GU_CULL_FACE);
+    sceGuStencilFunc(GU_EQUAL, 1, 1);
+    sceGuStencilOp(GU_KEEP, GU_KEEP, GU_ZERO);
+    u32 r = (rgb555 & 31) * 255 / 31, g = ((rgb555 >> 5) & 31) * 255 / 31, b = ((rgb555 >> 10) & 31) * 255 / 31;
+    sceGuColor((u32)(alpha * 255 / 31) << 24 | b << 16 | g << 8 | r);
+    sceGumDrawArray(GU_TRIANGLES, GU_VERTEX_32BITF | GU_TRANSFORM_3D, n, nullptr, v);
+    sceGuDisable(GU_STENCIL_TEST);
+    sceGuFrontFace(GU_CCW);
+    sceGuDepthMask(GU_FALSE);
+}

@@ -744,6 +744,22 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
   never shown in the race. Port: `dsHud::BackingQuads` (game code) and `RaceHudBacking`, which draws the texture
   exactly as filled rectangles of equal alpha (merged rows), so both drivers reuse their rectangle callback.
 
+### Step 5a: the car's shadow volume (done; console test pending)
+
+`Cars/<env>/shadow` (loaded by the car visual ov003 0x020fd914 as +0x10, model flag +0x86 bit 1) is a closed
+volume of the car's footprint, 1.31 high. The visual update (0x020fc6b4) places it at the car's display matrix
+(car +0x1c0), moved by the visual's vector +0x88 x 0x11f (never written in the race: zero) and lowered by 0x666
+(0.4 units: the volume spans -0.4..0.91 around the ground at the car's origin); it is shown while the car's LOD is
+below 3 (0x020fbf20 area). Its draw (itcm 0x01ffc7a4) sends the shapes twice: shadow-mask polygons
+(POLYGON_ATTR | 0x000e0070: shadow mode, back faces, polygon ID 0, alpha 14), then shadow polygons (| 0x020000c0:
+both faces, ID 2). Port: `G3Model::DrawShadowVolume` with the stencil buffer on both back-ends (host: an 8-bit
+stencil requested from SDL; PSP: the stencil in the alpha bits of the 8888 frame buffer, RGB masked in the mask
+pass, cleared with `sceGuClear(GU_STENCIL_BUFFER_BIT)`): stencil set where back faces fail the depth test, then
+colour where it is set and the depth test passes, once per pixel (stencil zeroed). Colour: the material's diffuse
+0x318c unlit (port reading; the DS lights it), alpha 14/31. From the chase camera most of it lies under the car,
+as on the DS. The alpha test made the mask pass depend on the last colour set: the mask pass now sets an opaque
+colour first.
+
 ### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
 
 - **0c, boosters pushing sideways** (`dsTrack::PieceRotationAt`, game logic): main 0x0208cb80 adds half a cell to x

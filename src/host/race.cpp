@@ -189,6 +189,15 @@ static void DrawRace(RaceSession &race, int w, int h)
         glPopMatrix();
     }
     G3SetDrawLight(nullptr);
+    // The car's shadow volume, after the opaque scene (it darkens what lies inside it).
+    u16 shadowColor;
+    int shadowAlpha;
+    if (race.ShadowDraw(g, &shadowColor, &shadowAlpha)) {
+        glPushMatrix();
+        glMultMatrixf(g);
+        race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
+        glPopMatrix();
+    }
 }
 
 // HUD stand-in text: 5 x 7 glyphs as GL quads, with a shadow.
@@ -357,6 +366,7 @@ int main(int argc, char **argv)
         return 1;
     }
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8); // the car's shadow volume
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     const int W = 768, H = 576;
     SDL_Window *win = SDL_CreateWindow("TM2PSP host - Coast", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,

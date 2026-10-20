@@ -542,28 +542,59 @@ void MulScale(float *m, float s)
     for (int i = 0; i < 12; i++)
         m[i] *= s;
 }
-} // namespace
 
-void G3Model::ComputeBounds()
+// Triangles (model space, xyz per vertex) with the DS winding: quads (a, b, c, d) -> abc, acd; quad strips take
+// v0 v1 v3 v2 per quad; triangle strips flip every other triangle.
+struct TriSink : BoundSink {
+    int mode = 0;
+    std::vector<float> v;  // vertices of the current primitive (transformed)
+    std::vector<float> *out = nullptr;
+    void Begin(int md) override
+    {
+        mode = md & 3;
+        v.clear();
+    }
+    void End() override {}
+    void Vertex(const float *p) override
+    {
+        for (int i = 0; i < 3; i++)
+            v.push_back(m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]);
+        int n = (int)v.size() / 3;
+        auto tri = [&](int a, int b, int c) {
+            for (int k : {a, b, c})
+                out->insert(out->end(), &v[k * 3], &v[k * 3] + 3);
+        };
+        if (mode == 0 && n % 3 == 0)
+            tri(n - 3, n - 2, n - 1);
+        else if (mode == 1 && n % 4 == 0)
+            tri(n - 4, n - 3, n - 2), tri(n - 4, n - 2, n - 1);
+        else if (mode == 2 && n >= 3)
+            (n % 2) ? tri(n - 3, n - 2, n - 1) : tri(n - 2, n - 3, n - 1);
+        else if (mode == 3 && n >= 4 && n % 2 == 0)
+            tri(n - 4, n - 3, n - 1), tri(n - 4, n - 1, n - 2);
+    }
+};
+
+template <class Sink>
+void WalkOps(const G3Model &md, Sink &sink)
 {
-    BoundSink sink;
     static const float id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     memcpy(sink.m, id, sizeof id);
     float scale = 1;
-    for (const Op &o : ops) {
+    for (const G3Model::Op &o : md.ops) {
         switch (o.kind) {
         case 0:
-            memcpy(sink.m, o.a < (int)nodes.size() ? nodes[o.a].m : id, sizeof id);
+            memcpy(sink.m, o.a < (int)md.nodes.size() ? md.nodes[o.a].m : id, sizeof id);
             if (scale != 1)
                 MulScale(sink.m, scale);
             break;
         case 2:
-            if (o.a < (int)shapes.size())
-                G3DecodeShape(shapes[o.a], sink);
+            if (o.a < (int)md.shapes.size())
+                G3DecodeShape(md.shapes[o.a], sink);
             break;
         case 3:
-            scale = upScale;
-            MulScale(sink.m, upScale);
+            scale = md.upScale;
+            MulScale(sink.m, md.upScale);
             break;
         case 4:
             if (scale != 1)
@@ -572,6 +603,23 @@ void G3Model::ComputeBounds()
             break;
         }
     }
+}
+} // namespace
+
+const std::vector<float> &G3Model::VolumeTriangles() const
+{
+    if (volumeTris.empty()) {
+        TriSink sink;
+        sink.out = &volumeTris;
+        WalkOps(*this, sink);
+    }
+    return volumeTris;
+}
+
+void G3Model::ComputeBounds()
+{
+    BoundSink sink;
+    WalkOps(*this, sink);
     hasBounds = !sink.pts.empty();
     if (!hasBounds)
         return;

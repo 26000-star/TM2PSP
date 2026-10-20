@@ -196,3 +196,41 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
     glDisable(GL_CULL_FACE);
     glDisable(GL_FOG);
 }
+
+// @port itcm:01ffc7a4 partial (the two passes with the stencil buffer; the DS polygon-ID rules are approximated:
+// a shadow pixel is drawn once, then its stencil is cleared)
+void G3Model::DrawShadowVolume(u16 rgb555, int alpha) const
+{
+    const std::vector<float> &t = VolumeTriangles();
+    if (t.empty())
+        return;
+    auto tris = [&]() {
+        glBegin(GL_TRIANGLES);
+        for (size_t k = 0; k < t.size(); k += 3)
+            glVertex3f(t[k], t[k + 1], t[k + 2]);
+        glEnd();
+    };
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_FOG);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_STENCIL_TEST);
+    glClear(GL_STENCIL_BUFFER_BIT);
+    glFrontFace(G3_FRONT_FACE);
+    // Mask: back faces only, stencil 1 where the depth test fails.
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColor4f(0, 0, 0, 1); // the alpha test would otherwise depend on the last colour set
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+    glStencilFunc(GL_ALWAYS, 1, 1);
+    glStencilOp(GL_KEEP, GL_REPLACE, GL_KEEP);
+    tris();
+    // Shadow: both faces where the stencil is set and the depth test passes, once per pixel.
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_CULL_FACE);
+    glStencilFunc(GL_EQUAL, 1, 1);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+    glColor4f((rgb555 & 31) / 31.0f, ((rgb555 >> 5) & 31) / 31.0f, ((rgb555 >> 10) & 31) / 31.0f, alpha / 31.0f);
+    tris();
+    glDisable(GL_STENCIL_TEST);
+    glDepthMask(GL_TRUE);
+}

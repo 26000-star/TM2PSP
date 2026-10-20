@@ -128,6 +128,15 @@ public:
     // The texture SRT of `material` (of `src`, this model or the batch) at the current animation frame
     // (G3SetTexAnimFrame): the animation's values over the material's own.
     G3TexSrt TexSrt(const G3Model *src, int material) const;
+    // A shadow volume as the DS draws Cars/<env>/shadow (itcm 0x01ffc7a4, model flag +0x86 bit 1): its shapes
+    // first as shadow-mask polygons (back faces, polygon ID 0: the stencil is set where they fail the depth test),
+    // then as shadow polygons (both faces, polygon ID 2) of colour `rgb555` and polygon alpha `alpha` where the
+    // stencil is set and the depth test passes, each pixel once; the stencil is cleared. No depth writes.
+    // Back-end file; needs a stencil buffer.
+    void DrawShadowVolume(u16 rgb555, int alpha) const;
+    // The model's triangles in model space (node matrices and scales applied), 9 floats each, built once.
+    const std::vector<float> &VolumeTriangles() const;
+    mutable std::vector<float> volumeTris;
     // Applies overrides[material] (if any) to a material's resolved colours: returns false if it is hidden.
     bool ApplyOverride(int material, G3Lit *lit, u32 &dif, u32 &alpha) const;
 

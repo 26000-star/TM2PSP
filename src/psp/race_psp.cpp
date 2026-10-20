@@ -270,6 +270,15 @@ void DrawRace(RaceSession &race)
         sceGumPopMatrix();
     }
     G3SetDrawLight(nullptr);
+    // The car's shadow volume, after the opaque scene (it darkens what lies inside it).
+    u16 shadowColor;
+    int shadowAlpha;
+    if (race.ShadowDraw(g, &shadowColor, &shadowAlpha)) {
+        sceGumPushMatrix();
+        sceGumMultMatrix((const ScePspFMatrix4 *)g);
+        race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
+        sceGumPopMatrix();
+    }
 }
 
 // Flat rectangle (menu panels), alpha blended.

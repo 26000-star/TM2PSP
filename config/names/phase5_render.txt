@@ -27,3 +27,5 @@ main:0208cb80 dsTrackGrid_CellOfPosition
 itcm:01fff814 dsLightMatCtrl_Draw
 itcm:01fff858 dsLightMatCtrl_SetMaterial
 main:02055f78 dsModelRes_LoadTexAnim
+itcm:01ffc7a4 dsModel_DrawShadowVolume
+itcm:01ffc994 dsModel_Draw

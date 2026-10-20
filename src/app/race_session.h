@@ -28,6 +28,7 @@ struct RaceSession {
     G3Model *batch = nullptr, *carModel = nullptr;
     G3Model *skyModel = nullptr;  // Sky/<env>/sky_<time of day> (ov003 0x0211de20)
     G3Model *wheelModels[2] = {}; // Cars/<env>/lwheel (wheels 0, 2) and rwheel (1, 3), ov003 0x020fd914
+    G3Model *shadowModel = nullptr; // Cars/<env>/shadow, a shadow volume (ov003 0x020fd914, car visual +0x10)
     float skyScale[3] = {1, 1, 1};
     // DS lighting and fog of the track's time of day (Scripts/config/tracks, see BuildLighting); off: the
     // material colours as before (tm_race --unlit).
@@ -56,6 +57,9 @@ struct RaceSession {
     // restart/respawn and updated once.
     void Frame(const dsCarInput &in);
     void ApplyCarLights();
+    // The car's shadow volume: its matrix (column-major) and colour; drawn by the drivers after the car with
+    // G3Model::DrawShadowVolume. False when there is none.
+    bool ShadowDraw(float *matrix, u16 *rgb555, int *alpha) const;
     // Marks the pieces whose bounding sphere touches the current camera's view frustum (vertical FOV from the
     // camera, aspect w/h, near and far planes as the driver's projection). A port addition for the PSP's GE: the
     // DS draws every piece the race grid gives it.

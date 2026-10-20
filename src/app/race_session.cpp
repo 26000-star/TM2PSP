@@ -183,6 +183,22 @@ void RaceSession::ApplyCarLights()
     }
 }
 
+// The car visual's update (0x020fc6b4) places the shadow model (+0x10, shown while the car's LOD is below 3,
+// 0x020fbf20 area) at the car's display matrix, moved by the visual's vector +0x88 x 0x11f (never written in the
+// race: zero) and lowered by 0x666 (0.4). Its material "lambert1" gives the colour (DIF 0x318c, the vertex colour
+// unlit: port reading) and the shadow passes keep its polygon alpha 0x0e (itcm 0x01ffc7a4: mask attr | 0x000e0070).
+bool RaceSession::ShadowDraw(float *matrix, u16 *rgb555, int *alpha) const
+{
+    if (!shadowModel || !car)
+        return false;
+    MtxFx43 m = car->matrix;
+    m.m[3][1] -= 0x666;
+    RaceMatrix(m, matrix);
+    *rgb555 = shadowModel->materials.empty() ? 0 : (u16)(shadowModel->materials[0].difAmb & 0x7fff);
+    *alpha = 0x0e;
+    return true;
+}
+
 RaceSession::~RaceSession()
 {
     pieces.clear();
@@ -262,6 +278,7 @@ bool RaceSession::Load(const char *trackName)
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
     carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
+    shadowModel = own(RaceLoadModel("Cars/coa/shadow", false));
     carLights.Reset(); // ov003 0x020fd914
     G3SetTexAnimFrame(texAnimFrame = 0);
     if (carModel) {
