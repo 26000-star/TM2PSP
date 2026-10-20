@@ -707,6 +707,34 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
 - **Sea backdrop:** `Misc/CoastSea/CoastSea` (4 vertices, texture-animated by ov003 0x0213079c, created by ov003
   0x0211de20) is a tilted quad whose placement is not understood yet; the port keeps its flat sea.
 
+### Step 4a: the game's HUD (done; console test pending)
+
+- **2D cells** (`src/shim/common/g2d_cells.*`, `tools/assets/nitro2d.py`): the NCGR / NCLR data offsets count from
+  the block payload (the old renderer used `offset - 8`, shifting tiles and palettes by 8 bytes: magenta colours and
+  scrambled tiles). NCER: 24-byte CEBK header {u16 cells, u16 attr (1 = 16-byte cells with a bounding box), u32
+  cells offset, u32 mapping (1D, 32 KB << mapping), u32 VRAM transfer table offset, ...}; the transfer table ({u32
+  max, u32 offset}, then per cell {u32 source, u32 size}) makes each cell's OAM tile numbers count from its own
+  source: address = source + tile x (32 << mapping). The HUD sprites and fonts (`Fonts/Cell/Font{20..40}_White`,
+  cell = character - 0x21) render exactly. `G2CellBank` builds an atlas per bank; both drivers draw sprites (GL
+  quads on the host, 5551 GE sprites with bilinear filtering on the PSP).
+- **HUD object** (`*0x02137830`, constructor ov003 0x02104f1c, init 0x02103958, update 0x02102e9c; game code
+  `src/game/hud/dsHud.*`), DS coordinates 256 x 192, sprites created by main 0x02069584 / 0x020696b0 (+0x10
+  visible, +0x28/+0x2c position fx32 = cell origin, +0x3e cell, +0x44 screen). Ported parts of the solo race:
+  countdown +0x58 (HUD_Small at (128, 75): "3" while the clock > 2 s, "2" > 1 s, "1" > 0, "GO!" hidden 60 ticks
+  later); speed +0x2c (three right-aligned HUD_Small digits ending at x = 252, y = 179, value = (speed + 0x120) x
+  3.6 rounded, widths table 0x02134f14, leading zeros hidden); laps +0x04 ("n/N" from x = 50 leftwards, widths
+  0x02134f3c, '/' = cell 0xe, only with 2 laps or more); split times +0x6c / +0xc4 (nine SplitTimeSprites at x =
+  88, y = 12 and 31: sign, minutes, ':', seconds, ':', hundredths; white, slower red 0x0210bca0 / faster blue
+  0x0210bcdc against the record's split (0x0209558c), shown 120 frames); clock +0x130 (0x021057cc / 0x02105094 /
+  0x02105408; base cell 0xf = '0', ':' 0x19, "--" 0xc).
+- **Deviations:** the clock lives on the DS bottom screen in Font40; the PSP has one screen, so it is drawn on the
+  race view top right in the game's small variant (Font28, pitch 10/5, as the bottom screen's best/target times).
+  On wide screens each part follows its screen edge (`dsHudSprite::anchor`). The record's split times come from the
+  save file (`split <track> t1 t2 ...` lines in `save.txt`, written with the best time). Not ported: the text
+  messages (+0x3c, localised strings through main 0x0208547c at (128, 102)), the speed backing
+  (`Graphics/hud/backing.n`, flags +0x128), the solo bottom screen (four blue panels: clock, target, best, retries),
+  network and ghost modes. The HUD banks are loaded once and kept (reload_test stays flat).
+
 ### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
 
 - **0c, boosters pushing sideways** (`dsTrack::PieceRotationAt`, game logic): main 0x0208cb80 adds half a cell to x

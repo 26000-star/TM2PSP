@@ -1,0 +1,34 @@
+# Names recovered in phase 5 (race HUD, step 4a).
+# Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- race HUD object (*0x02137830) ----
+ov003:02104f1c dsHud_ctor
+ov003:02103958 dsHud_Init
+ov003:02102e9c dsHud_Update
+ov003:021048a0 dsHud_SoloSplit
+# countdown +0x58
+ov003:02105ca8 dsHudCountdown_Init
+ov003:02105b78 dsHudCountdown_Update
+# speedometer +0x2c
+ov003:02105fac dsHudSpeed_Init
+ov003:02105de8 dsHudSpeed_Update
+# lap counter +0x04
+ov003:0210941c dsHudLaps_Init
+ov003:02108d70 dsHudLaps_Update
+ov003:0210908c dsHudLaps_Layout
+ov003:02109304 dsHudLaps_SetDigit
+# split times +0x6c / +0xc4
+ov003:0210bf68 dsHudSplit_Init
+ov003:0210ba88 dsHudSplit_SetTime
+ov003:0210bd2c dsHudSplit_SetWhite
+ov003:0210bca0 dsHudSplit_SetSlower
+ov003:0210bcdc dsHudSplit_SetFaster
+# race clock +0x130
+ov003:021057cc dsHudClock_Init
+ov003:02105094 dsHudClock_SetTime
+ov003:02105408 dsHudClock_Update
+# 2D sprites and text
+main:02069584 dsSprite_Create
+main:020696b0 dsSprite_CreateInBank
+main:0208547c dsText_Draw
+main:0209558c dsRecord_SplitTime
