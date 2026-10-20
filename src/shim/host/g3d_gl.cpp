@@ -49,8 +49,11 @@ struct GlSink : G3ShapeSink {
     const G3DrawLight *light = nullptr;
     const G3Lit *lit = nullptr;
     const float *node = nullptr;
-    explicit GlSink(const G3Texture *t)
-        : tw(t && t->w ? 1.0f / (16.0f * t->w) : 0), th(t && t->h ? 1.0f / (16.0f * t->h) : 0) {}
+    G3TexSrt srt;                  // texture matrix (scale, then minus the translation, in texture units)
+    GlSink(const G3Texture *t, const G3TexSrt &m)
+        : tw(t && t->w ? m.scale[0] / (16.0f * t->w) : 0), th(t && t->h ? m.scale[1] / (16.0f * t->h) : 0), srt(m)
+    {
+    }
     void Begin(int mode) override
     {
         static const GLenum modes[4] = {GL_TRIANGLES, GL_QUADS, GL_TRIANGLE_STRIP, GL_QUAD_STRIP};
@@ -69,7 +72,7 @@ struct GlSink : G3ShapeSink {
         G3WorldNormal(*light, node, n, w);
         Color(G3LightVertex(*lit, *light->env, w, light->eye, light->specular));
     }
-    void TexCoord(s16 s, s16 t) override { glTexCoord2f(s * tw, t * th); }
+    void TexCoord(s16 s, s16 t) override { glTexCoord2f(s * tw - srt.trans[0], t * th - srt.trans[1]); }
     void Vertex(const float *p) override { glVertex3f(p[0], p[1], p[2]); }
 };
 
@@ -104,6 +107,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
     float alpha = 1;
     const G3DrawLight *light = G3GetDrawLight();
     G3Lit lit;
+    G3TexSrt srt;
     const float *node = nullptr;
     for (const Op &o : ops) {
         switch (o.kind) {
@@ -122,6 +126,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
             hidden = false;
             {
                 const G3Model *src = batchMaterials ? batch : this;
+                srt = TexSrt(src, o.a);
                 if (src && o.a < (int)src->materials.size()) {
                     const Material &m = src->materials[o.a];
                     dif = m.difAmb & 0x7fff;
@@ -166,8 +171,8 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
             if (o.a < (int)shapes.size() && !otherPass && !hidden) {
                 // Shapes without TEXCOORD start at (0, 0), as the PSP back-end's arrays (GL's current coordinate
                 // would otherwise leak from the last piece drawn: the culling check caught it on the car).
-                glTexCoord2f(0, 0);
-                GlSink sink(tex);
+                glTexCoord2f(-srt.trans[0], -srt.trans[1]);
+                GlSink sink(tex, srt);
                 if (light) {
                     sink.light = light;
                     sink.lit = &lit;

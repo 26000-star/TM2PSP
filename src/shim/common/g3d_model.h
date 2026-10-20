@@ -10,7 +10,7 @@
 // lists converted to vertex arrays once). Both implement G3Model::Upload, Draw and DrawPart.
 //
 // Not emulated yet: the DS lighting equation, toon/highlight shading, fog, polygon IDs, edge marking,
-// matrix-stack skinning (MTX_RESTORE inside display lists), texture SRT animation.
+// matrix-stack skinning (MTX_RESTORE inside display lists), texture matrix rotation.
 #pragma once
 
 #include <string>
@@ -42,6 +42,15 @@ struct G3TexSet {
 };
 
 struct G3Lit;
+
+// Texture SRT of a material (NNSG3dResMatData texture matrix, or a BTA0/SRT0 material animation): texture
+// coordinates in texture units (1 = the texture's width / height) become s * scale - trans, the Maya convention
+// the game's exporter uses (NNS_G3D texture matrix mode of the models; the sign of the translation is a port
+// reading, not checked on the DS). Rotation is left out: every material of the race uses rotation zero.
+struct G3TexSrt {
+    bool used = false;
+    float scale[2] = {1, 1}, trans[2] = {0, 0};
+};
 
 class G3Model {
 public:
@@ -78,6 +87,7 @@ public:
         std::string name;
         int w = 0, h = 0;
         u32 texParam = 0;          // TEXIMAGE_PARAM bits 16..19: repeat S/T, flip S/T
+        G3TexSrt srt;              // static texture matrix (flag bit 0)
     };
     struct Node { float m[16]; };
     struct Op { int kind, a; };    // kinds: 0 node, 1 material, 2 draw, 3 scale up, 4 scale down
@@ -103,6 +113,21 @@ public:
         int color = -1;            // RGB555 for diffuse, ambient, specular and emission, -1 = the material's
     };
     mutable std::vector<MatOverride> overrides;
+    // Texture SRT animation (<model>.na, BTA0 with an SRT0 block, loaded by main 0x02055f78 next to the model): per
+    // animated material (index in this model's materials, or in the batch's for batch materials) the values of
+    // scale S, scale T, rotation, translation S, translation T per frame (one value: constant).
+    struct TexAnim {
+        int material = -1;
+        std::vector<float> comp[5];
+    };
+    std::vector<TexAnim> texAnims;
+    int texAnimFrames = 0;
+    // Reads a .na file; material names are looked up in `names` (the batch for batch materials). False if absent
+    // or not a texture SRT animation.
+    bool LoadTexAnim(const std::vector<u8> &file, const G3Model &names);
+    // The texture SRT of `material` (of `src`, this model or the batch) at the current animation frame
+    // (G3SetTexAnimFrame): the animation's values over the material's own.
+    G3TexSrt TexSrt(const G3Model *src, int material) const;
     // Applies overrides[material] (if any) to a material's resolved colours: returns false if it is hidden.
     bool ApplyOverride(int material, G3Lit *lit, u32 &dif, u32 &alpha) const;
 
@@ -173,6 +198,8 @@ struct G3DrawLight {
     int variant = 0;               // PSP: vertex colours are baked per variant (piece rotation); -1 = every draw
 };
 void G3SetDrawLight(const G3DrawLight *l);
+// Frame of the material animations for the next draws (the race advances it once per 30 Hz frame).
+void G3SetTexAnimFrame(int frame);
 const G3DrawLight *G3GetDrawLight();
 // World normal of a model-space normal under a node matrix (column-major 4x4, null = identity), normalised.
 void G3WorldNormal(const G3DrawLight &l, const float *node, const float *n, float *out);

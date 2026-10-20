@@ -162,8 +162,9 @@ struct SeaVertex {
 // projects out of its guard band, as the track pieces showed (split to 3-unit edges, G3_GU_MAX_EDGE): the sea is
 // drawn as nested square rings around the eye, ring L covering +-24 x 2^L units with tiles of 3 x 2^L (3 units
 // within at least 18 units of the eye; ring 6: 192-unit tiles, +-1536 units, past the 600-unit far plane), each
-// ring skipping the square of the ring inside it. Rows are triangle strips. (Before: 24 x 24 tiles of 24 units, +-288 units: tiles near the camera were dropped
-// on the PSP-3000 and the sky showed below the horizon past 288 units.)
+// ring skipping the square of the ring inside it. Rows are triangle strips. (Before: 24 x 24 tiles of 24 units,
+// +-288 units: tiles near the camera were dropped on the PSP-3000 and the sky showed below the horizon past 288
+// units.)
 void DrawSea(float cx, float cz)
 {
     const int RINGS = 7, N = 16; // tiles per side of a ring; the ring inside covers 8 x 8 of them

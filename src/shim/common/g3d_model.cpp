@@ -225,6 +225,31 @@ static void ObjectMatrix(const std::vector<u8> &d, size_t off, float *m)
     m[15] = 1;
 }
 
+// NNSG3dResMatData from its item tag: u16 flag at +0x1e (bit 0 texture matrix used, 1 scale one, 2 rotation
+// zero, 3 translation zero), origWidth / origHeight at +0x20, magW / magH, then the texture SRT fields the flags do
+// not zero: scale S, T (fx32), rotation sin, cos (fx16), translation S, T (fx32).
+static void ReadMatTail(const std::vector<u8> &d, size_t p, G3Model::Material &m)
+{
+    u16 flag = R16(d, p + 0x1e);
+    m.w = R16(d, p + 0x20);
+    m.h = R16(d, p + 0x22);
+    if (!(flag & 1))
+        return;
+    size_t q = p + 0x2c;
+    m.srt.used = true;
+    if (!(flag & 2)) {
+        m.srt.scale[0] = (s32)R32(d, q) / 4096.0f;
+        m.srt.scale[1] = (s32)R32(d, q + 4) / 4096.0f;
+        q += 8;
+    }
+    if (!(flag & 4))
+        q += 4; // rotation: not used by the race's materials (see G3TexSrt)
+    if (!(flag & 8)) {
+        m.srt.trans[0] = (s32)R32(d, q) / 4096.0f;
+        m.srt.trans[1] = (s32)R32(d, q + 4) / 4096.0f;
+    }
+}
+
 bool G3Model::Load(const std::vector<u8> &d)
 {
     if (d.size() < 0x14 || memcmp(d.data(), "BMD0", 4) != 0)
@@ -274,8 +299,7 @@ bool G3Model::Load(const std::vector<u8> &d)
             m.specEmi = R32(d, p + 8);
             m.polyAttr = R32(d, p + 12);
             m.name = md.names[i];
-            m.w = R16(d, p + 0x2c);
-            m.h = R16(d, p + 0x2e);
+            ReadMatTail(d, p, m);
             materials.push_back(m);
         }
         for (int k = 0; k < 2; k++) {
@@ -372,8 +396,7 @@ bool G3Model::LoadMaterialBin(const std::vector<u8> &d)
         m.specEmi = R32(d, p + 8);
         m.polyAttr = R32(d, p + 12);
         m.texParam = R32(d, p + 20);
-        m.w = R16(d, p + 0x24);
-        m.h = R16(d, p + 0x26);
+        ReadMatTail(d, p, m);
         p += R16(d, p + 2);
         auto name = [&](int k) {
             char n[17] = {};
@@ -591,6 +614,73 @@ void G3Model::BorrowTextures(const G3Model &from)
 // main 0x02055970 (the colour part): set 0 for track models (renderer flag +0x70), set 1 for the car (+0x71).
 // @port main:02055970 partial (colours, light masks, alpha and fog; polygon IDs and the shadow-volume modes of the
 // "shadowback" / "shadowfront" materials are left out)
+static int g_texAnimFrame;
+void G3SetTexAnimFrame(int frame) { g_texAnimFrame = frame; }
+
+// @port main:02055f78 partial (the .na file next to a model; NNS SRT0 decoding as NitroSystem's material animation:
+// per material five {u32 info, u32 value} pairs, info bit 29 = constant (value), bit 28 = fx16 data, else fx32
+// data at the animation block + value, frame count in bits 0-15; rotation constants are packed sin/cos)
+bool G3Model::LoadTexAnim(const std::vector<u8> &d, const G3Model &names)
+{
+    if (d.size() < 0x18 || memcmp(d.data(), "BTA0", 4))
+        return false;
+    size_t srt = R32(d, 0x10);
+    if (srt + 8 > d.size() || memcmp(&d[srt], "SRT0", 4))
+        return false;
+    Dict anims = ReadDict(d, srt + 8);
+    if (anims.data.empty())
+        return false;
+    size_t a = srt + R32(d, anims.data[0]);
+    if (a + 8 > d.size() || d[a] != 'M')
+        return false;
+    texAnimFrames = R16(d, a + 4);
+    Dict mats = ReadDict(d, a + 8);
+    for (size_t i = 0; i < mats.data.size(); i++) {
+        TexAnim t;
+        for (size_t k = 0; k < names.materials.size(); k++)
+            if (names.materials[k].name == mats.names[i])
+                t.material = (int)k;
+        if (t.material < 0)
+            continue;
+        size_t e = mats.data[i];
+        for (int c = 0; c < 5; c++) {
+            u32 info = R32(d, e + 8 * c), v = R32(d, e + 8 * c + 4);
+            if (info & 0x20000000) {
+                t.comp[c].push_back(c == 2 ? 0.0f : (s32)v / 4096.0f);
+            } else {
+                int n = info & 0xffff;
+                bool fx16 = (info >> 28) & 1;
+                for (int f = 0; f < n; f++)
+                    t.comp[c].push_back((fx16 ? (s16)R16(d, a + v + 2 * f) : (s32)R32(d, a + v + 4 * f)) / 4096.0f);
+            }
+        }
+        texAnims.push_back(t);
+    }
+    return !texAnims.empty();
+}
+
+G3TexSrt G3Model::TexSrt(const G3Model *src, int material) const
+{
+    G3TexSrt r;
+    if (src && material >= 0 && material < (int)src->materials.size())
+        r = src->materials[material].srt;
+    for (const TexAnim &t : texAnims) {
+        if (t.material != material)
+            continue;
+        size_t f = texAnimFrames > 0 ? (size_t)(g_texAnimFrame % texAnimFrames) : 0;
+        auto at = [&](int c) {
+            const std::vector<float> &v = t.comp[c];
+            return v.empty() ? 0.0f : v[std::min(f, v.size() - 1)];
+        };
+        r.used = true;
+        r.scale[0] = at(0);
+        r.scale[1] = at(1);
+        r.trans[0] = at(3);
+        r.trans[1] = at(4);
+    }
+    return r;
+}
+
 // @port itcm:01fff858 partial (material controller: alpha and colours; the polygon ID 0x31 - light is not used)
 bool G3Model::ApplyOverride(int material, G3Lit *lit, u32 &dif, u32 &alpha) const
 {

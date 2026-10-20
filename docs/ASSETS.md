@@ -58,12 +58,29 @@ u32 count                      // 91 on Coast
 u32 names_offset               // from +8
 count x { u16 tag, u16 size (0x2c), NNSG3dResMatData: u32 diffAmb, specEmi, polygonAttr, polygonAttrMask,
           texImageParam (repeat/flip bits only), texImageParamMask, u16 texPlttBase, flag, origWidth,
-          origHeight, fx32 magW, magH }
+          origHeight, fx32 magW, magH, then the texture SRT fields the flag does not zero }
 count x { char material[16], texture[16], palette[16] }   // names in texturebatch.n's TEX0
 ```
 
 The texture and palette are found by name in the environment's `texturebatch.n` (84 textures on Coast). Indexing
 the TEX0 dictionary directly with the batch byte gives wrong textures (turbo signs on every road).
+
+Material `flag` (also in MDL0 materials): bit 0 texture matrix used, bit 1 scale one, bit 2 rotation zero, bit 3
+translation zero; the record then carries scale S, T (fx32) if bit 1 is clear, rotation sin, cos (fx16) if bit 2 is
+clear, translation S, T (fx32, texture units) if bit 3 is clear (size 0x30 instead of 0x2c). On Coast only the arrow
+signs use it (`signleft1/2/3`, flag 0x1fc7, translation S 0.975 or 0.025).
+
+## Texture SRT animations (`.na`)
+
+`<piece>.na` next to a piece model (main 0x02055f78 tries it for every model; 20 per environment, the Sign*
+pieces): a `BTA0` container with one `SRT0` block: NNS dictionary of animations (one, `M\0AT` header, u16 frame
+count, u16 flag), then a dictionary of materials (names of the batch materials), each entry five
+`{u32 info, u32 value}` pairs for scale S, scale T, rotation, translation S, translation T. `info` bit 29: constant
+(`value`; rotation packs sin/cos fx16), else bit 28 = fx16 values, otherwise fx32, `info & 0xffff` values at the
+animation block + `value`. Coast: 9 frames, the arrow strip (`signArrow`, 4 colour blocks) and the TrackMania banner
+scroll by 0.025 of the texture width per frame, which makes the chevron colours run along the arrows.
+`G3Model::LoadTexAnim` / `TexSrt`; both back-ends apply s * scale - translation (sceGuTexScale / sceGuTexOffset on
+the PSP).
 
 ## Track piece collision `.h`
 

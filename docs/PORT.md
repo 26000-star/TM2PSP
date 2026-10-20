@@ -736,6 +736,15 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
   units of the eye, doubling per ring, +-1536 units), rows as triangle strips (3,136 vertices, 50 KB of display
   list). The terrain itself matches the game (`tm_trackdump --terrain` also prints the ground-level cell map now:
   the enclosed empty cells are sea inlets, as on the DS).
+- **0d, arrow signs**: the chevrons of the Sign* pieces are a quad strip with skewed texture coordinates over a 64 x 8
+  strip of four colour blocks (`signArrow`, red to green); the game scrolls it with a texture SRT animation
+  (`<piece>.na`, format in ASSETS.md) over the material's own texture matrix (material flag bit 0, translation S
+  0.975 / 0.025), so the colours run along the arrows. The port ignored both: static colours with black block
+  borders at odd places. Now `G3Model::LoadTexAnim` / `TexSrt` and both back-ends apply s * scale - translation
+  (the Maya convention; with this sign the chevrons run in their arrow's direction on SignLeft and SignRight alike,
+  checked from the meshes; the opposite sign would run them backwards). The animation advances one frame per 30 Hz
+  frame (the game's own rate was not found; port choice). PPSSPP showed no other difference from the host: whatever
+  the console shows beyond the missing animation needs the user's eyes.
 - **Host fix found by check_culling**: shapes without TEXCOORD used GL's current texture coordinate left by the
   last piece drawn (a black part of the car changed colour with culling); each shape now starts at (0, 0) as the
   PSP arrays do.

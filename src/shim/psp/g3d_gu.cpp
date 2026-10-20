@@ -450,6 +450,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
     const G3DrawLight *light = G3GetDrawLight();
     (void)node;
     G3Lit lit;
+    G3TexSrt srt;
     bool skip = false;
     const G3Texture *tex = nullptr;
     u32 dif = 0x7fff;
@@ -477,6 +478,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
             skip = false;
             mat = o.a;
             src = batchMaterials ? batch : this;
+            srt = TexSrt(src, o.a);
             if (src && o.a < (int)src->materials.size()) {
                 const Material &m = src->materials[o.a];
                 dif = m.difAmb & 0x7fff;
@@ -608,8 +610,13 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                 drawV = v;
             }
             if (mesh.count && draw) {
-                if (mesh.su)
-                    sceGuTexScale(mesh.su, mesh.sv);
+                if (mesh.su) {
+                    // Texture SRT (G3TexSrt): the offset is in units of the uploaded texture (twice as wide
+                    // when mirrored).
+                    const GuTex *g = (const GuTex *)tex->gu;
+                    sceGuTexScale(mesh.su * srt.scale[0], mesh.sv * srt.scale[1]);
+                    sceGuTexOffset(-srt.trans[0] * g->su, -srt.trans[1] * g->sv);
+                }
                 sceGumDrawArray(GU_TRIANGLES, GU_VTYPE, mesh.count, nullptr, drawV);
             }
             break;

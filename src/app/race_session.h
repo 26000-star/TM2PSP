@@ -46,6 +46,7 @@ struct RaceSession {
     // "rlight", "hlight"; -1: absent), applied as G3Model overrides after every frame.
     dsCarLights carLights;
     int carLightMaterial[3] = {-1, -1, -1};
+    int texAnimFrame = 0;         // frame of the material animations (G3SetTexAnimFrame)
 
     // The track's collision shapes leave the collision world with the track; the drivers clear the world's mesh
     // cache after deleting a session (RaceUnloadWorld) so that reloading tracks does not grow the heap.

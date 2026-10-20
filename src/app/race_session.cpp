@@ -246,8 +246,14 @@ bool RaceSession::Load(const char *trackName)
     std::map<std::string, G3Model *> cache;
     for (const dsTrackPiece *p : track.pieces) {
         auto it = cache.find(p->modelPath);
-        if (it == cache.end())
-            it = cache.emplace(p->modelPath, own(RaceLoadModel(p->modelPath))).first;
+        if (it == cache.end()) {
+            G3Model *m = own(RaceLoadModel(p->modelPath));
+            // The texture SRT animation next to the model (main 0x02055f78: the arrow signs' scrolling lights).
+            std::vector<u8> na;
+            if (m && batch && RaceReadFile("graphics/" + p->modelPath + ".na", &na))
+                m->LoadTexAnim(na, m->batchMaterials ? *batch : *m);
+            it = cache.emplace(p->modelPath, m).first;
+        }
         if (it->second)
             pieces.push_back({it->second, p});
         if (it->second && !it->second->hasBounds)
@@ -257,6 +263,7 @@ bool RaceSession::Load(const char *trackName)
     // places itself in the visual update 0x02126d10, not ported yet).
     carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
     carLights.Reset(); // ov003 0x020fd914
+    G3SetTexAnimFrame(texAnimFrame = 0);
     if (carModel) {
         static const char *const lightNames[3] = {"blight", "rlight", "hlight"};
         carModel->overrides.assign(carModel->materials.size(), G3Model::MatOverride());
@@ -376,6 +383,7 @@ void RaceSession::Frame(const dsCarInput &in)
                 cams[camIndex].Reset();
         }
     cams[camIndex].Update(*car); // camera vtable +0x1c, once per frame
+    G3SetTexAnimFrame(++texAnimFrame); // material animations: one frame per 30 Hz frame (port choice)
     // The player's update (0x0210ed9c) sets the lights once per 30 Hz frame from the pad and the engine's gear.
     carLights.Update(in.accel > 0, in.brake > 0, car->engine ? car->engine->gear : 0);
     ApplyCarLights();
