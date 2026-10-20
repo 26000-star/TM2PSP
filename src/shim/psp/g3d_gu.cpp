@@ -508,6 +508,9 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                             sceGuDisable(GU_FOG);
                     }
                 }
+                // Hidden shapes are still converted by Prepare (the brake lights come on during the race).
+                if (src == this && !ApplyOverride(o.a, light ? &lit : nullptr, dif, a) && draw)
+                    skip = true;
                 alpha = a == 0 ? 1.0f : a / 31.0f;
             } else {
                 src = nullptr;

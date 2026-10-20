@@ -158,26 +158,42 @@ struct SeaVertex {
     float x, y, z;
 };
 
-// Sea at the Coast sea level (2.5), as on the host, but as a grid of 24-unit tiles around the car: the GE drops
-// triangles that leave its guard band, which a single 1300-unit quad does near the camera.
+// Sea at the Coast sea level (2.5), as on the host (a flat colour). The GE drops a whole triangle when a vertex
+// projects out of its guard band, as the track pieces showed (split to 3-unit edges, G3_GU_MAX_EDGE): the sea is
+// drawn as nested square rings around the eye, ring L covering +-24 x 2^L units with tiles of 3 x 2^L (3 units
+// within at least 18 units of the eye; ring 6: 192-unit tiles, +-1536 units, past the 600-unit far plane), each
+// ring skipping the square of the ring inside it. Rows are triangle strips. (Before: 24 x 24 tiles of 24 units, +-288 units: tiles near the camera were dropped
+// on the PSP-3000 and the sky showed below the horizon past 288 units.)
 void DrawSea(float cx, float cz)
 {
-    const int N = 24;
-    const float T = 24;
-    float x0 = floorf(cx / T) * T - N / 2 * T, z0 = floorf(cz / T) * T - N / 2 * T;
-    SeaVertex *v = (SeaVertex *)sceGuGetMemory(sizeof(SeaVertex) * N * N * 6);
+    const int RINGS = 7, N = 16; // tiles per side of a ring; the ring inside covers 8 x 8 of them
     u32 c = 0xff000000 | (u32)(0.6f * 255) << 16 | (u32)(0.35f * 255) << 8 | (u32)(0.15f * 255);
-    int k = 0;
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++) {
-            float ax = x0 + i * T, az = z0 + j * T, bx = ax + T, bz = az + T;
-            SeaVertex q[6] = {{c, ax, 2.5f, az}, {c, ax, 2.5f, bz}, {c, bx, 2.5f, bz},
-                              {c, ax, 2.5f, az}, {c, bx, 2.5f, bz}, {c, bx, 2.5f, az}};
-            memcpy(&v[k], q, sizeof q);
-            k += 6;
-        }
     sceGuDisable(GU_TEXTURE_2D);
-    sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, k, nullptr, v);
+    for (int ring = 0; ring < RINGS; ring++) {
+        float t = 3.0f * (float)(1 << ring);
+        // Ring origin on a 2t grid; the inner ring (tile t / 2) starts at floor(c / t) * t - 4t, which is on this
+        // ring's t grid, 4 or 5 tiles in: its square is skipped exactly.
+        int kx = (int)floorf(cx / (2 * t)), kz = (int)floorf(cz / (2 * t));
+        float x0 = (kx * 2 - N / 2) * t, z0 = (kz * 2 - N / 2) * t;
+        int hx = (int)floorf(cx / t) - 2 * kx + 4, hz = (int)floorf(cz / t) - 2 * kz + 4;
+        for (int j = 0; j < N; j++) {
+            bool holeRow = ring > 0 && j >= hz && j < hz + 8;
+            // One strip for the whole row, or the parts left and right of the inner ring.
+            int spans[2][2] = {{0, holeRow ? hx : N}, {hx + 8, N}};
+            for (int sp = 0; sp < (holeRow ? 2 : 1); sp++) {
+                int a = spans[sp][0], b = spans[sp][1];
+                int n = (b - a + 1) * 2;
+                SeaVertex *v = (SeaVertex *)sceGuGetMemory(sizeof(SeaVertex) * n);
+                float za = z0 + j * t, zb = za + t;
+                for (int i = a, k = 0; i <= b; i++) {
+                    float x = x0 + i * t;
+                    v[k++] = {c, x, 2.5f, za};
+                    v[k++] = {c, x, 2.5f, zb};
+                }
+                sceGumDrawArray(GU_TRIANGLE_STRIP, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, n, nullptr, v);
+            }
+        }
+    }
 }
 
 void DrawRace(RaceSession &race)

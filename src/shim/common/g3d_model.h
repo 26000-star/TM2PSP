@@ -41,6 +41,8 @@ struct G3TexSet {
     int FindPal(const std::string &n) const;
 };
 
+struct G3Lit;
+
 class G3Model {
 public:
     G3Model() = default;
@@ -91,6 +93,18 @@ public:
     float guardEdge = 3.0f;
     G3TexSet texSet;               // TEX0 of this container (kept for material.bin)
     mutable void *backend = nullptr; // back-end data (PSP: converted shapes)
+    // Draw-time material overrides, as the game's material controllers (created by main 0x0206b0xx for the car's
+    // "blight" / "rlight" / "hlight" materials; itcm 0x01fff814 draws the shapes only when the light is on,
+    // 0x01fff858 sets the polygon alpha and DIF_AMB = SPE_EMI = the light colour). By material index (this
+    // model's own materials), empty = none. Prepare still converts hidden shapes.
+    struct MatOverride {
+        bool hidden = false;
+        int alpha = -1;            // polygon alpha 1..31, -1 = the material's
+        int color = -1;            // RGB555 for diffuse, ambient, specular and emission, -1 = the material's
+    };
+    mutable std::vector<MatOverride> overrides;
+    // Applies overrides[material] (if any) to a material's resolved colours: returns false if it is hidden.
+    bool ApplyOverride(int material, G3Lit *lit, u32 &dif, u32 &alpha) const;
 
 private:
     // Two passes as the DS orders polygons: opaque first, then translucent (polygon alpha < 31 or a texture with

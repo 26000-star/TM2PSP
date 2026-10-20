@@ -167,6 +167,22 @@ int RaceSession::CarDraws(Draw *out) const
     return n;
 }
 
+// The material controllers (itcm 0x01fff814 / 0x01fff858): a light's shapes are drawn while its level is not 0,
+// with the level as polygon alpha and its colour (brake red 0x1f, reverse and head white) as DIF_AMB and SPE_EMI.
+void RaceSession::ApplyCarLights()
+{
+    static const u16 colors[3] = {0x1f, 0x7fff, 0x7fff}; // main 0x0206b0xx
+    for (int l = 0; l < 3; l++) {
+        int m = carLightMaterial[l];
+        if (!carModel || m < 0 || m >= (int)carModel->overrides.size())
+            continue;
+        G3Model::MatOverride &o = carModel->overrides[m];
+        o.hidden = carLights.level[l] == 0;
+        o.alpha = carLights.level[l] & 31;
+        o.color = colors[l];
+    }
+}
+
 RaceSession::~RaceSession()
 {
     pieces.clear();
@@ -240,6 +256,18 @@ bool RaceSession::Load(const char *trackName)
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
     carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
+    carLights.Reset(); // ov003 0x020fd914
+    if (carModel) {
+        static const char *const lightNames[3] = {"blight", "rlight", "hlight"};
+        carModel->overrides.assign(carModel->materials.size(), G3Model::MatOverride());
+        for (int l = 0; l < 3; l++) {
+            carLightMaterial[l] = -1;
+            for (size_t i = 0; i < carModel->materials.size(); i++)
+                if (carModel->materials[i].name == lightNames[l])
+                    carLightMaterial[l] = (int)i;
+        }
+        ApplyCarLights();
+    }
     // Wheels: lwheel for 0 and 2, rwheel for 1 and 3 (ov003 0x020fd914 picks the name per wheel; rwheel has no
     // textures of its own and shows lwheel's).
     G3Model *lw = RaceLoadModel("Cars/coa/lwheel", false), *rw = RaceLoadModel("Cars/coa/rwheel", false);
@@ -348,6 +376,9 @@ void RaceSession::Frame(const dsCarInput &in)
                 cams[camIndex].Reset();
         }
     cams[camIndex].Update(*car); // camera vtable +0x1c, once per frame
+    // The player's update (0x0210ed9c) sets the lights once per 30 Hz frame from the pad and the engine's gear.
+    carLights.Update(in.accel > 0, in.brake > 0, car->engine ? car->engine->gear : 0);
+    ApplyCarLights();
     hud.Update(*progress, car->speed, 2, recordSplits, recordTime); // end of dsRace_Update (0x02113048)
 }
 

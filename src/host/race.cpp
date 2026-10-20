@@ -1,5 +1,5 @@
 // tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
-//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto] [--save file] [--screen menu|pause|result]
+//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result]
 // Without --track, the track menu comes first (RaceApp, src/app/race_app.h; best times in tm_race_save.txt next to
 // the program, or --save). Menus: arrows, Enter = choose, Esc = back / quit.
 // Race keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
@@ -315,7 +315,7 @@ int main(int argc, char **argv)
 {
     const char *root = "extract/files", *trackName = nullptr, *shot = nullptr, *save = nullptr,
                *screen = nullptr;
-    int frames = -1, finishAt = -1;
+    int frames = -1, finishAt = -1, brakeFrom = -1;
     bool autoDrive = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
@@ -340,8 +340,10 @@ int main(int argc, char **argv)
             save = argv[++i];
         else if (!strcmp(argv[i], "--auto"))
             autoDrive = true;
+        else if (!strcmp(argv[i], "--brake-from") && i + 1 < argc) // auto drive: brake instead from that frame
+            brakeFrom = atoi(argv[++i]);
         else {
-            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto] [--save file] [--screen menu|pause|result]\n");
+            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result]\n");
             return 2;
         }
     }
@@ -430,8 +432,9 @@ int main(int argc, char **argv)
         }
         const u8 *k = SDL_GetKeyboardState(nullptr);
         dsCarInput in;
-        in.accel = (k[SDL_SCANCODE_UP] || autoDrive) ? FX32_ONE : 0;
-        in.brake = k[SDL_SCANCODE_DOWN] ? FX32_ONE : 0;
+        bool autoBrake = autoDrive && brakeFrom >= 0 && frame >= brakeFrom;
+        in.accel = (k[SDL_SCANCODE_UP] || (autoDrive && !autoBrake)) ? FX32_ONE : 0;
+        in.brake = (k[SDL_SCANCODE_DOWN] || autoBrake) ? FX32_ONE : 0;
         // The game's steer is positive to the left (seen on a real PSP-3000, same code as here).
         in.steer = (k[SDL_SCANCODE_LEFT] ? FX32_ONE : 0) - (k[SDL_SCANCODE_RIGHT] ? FX32_ONE : 0);
         // --screen pause|result: that menu is opened for the last scripted frame (layout check only).

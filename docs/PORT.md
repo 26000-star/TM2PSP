@@ -707,6 +707,39 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
 - **Sea backdrop:** `Misc/CoastSea/CoastSea` (4 vertices, texture-animated by ov003 0x0213079c, created by ov003
   0x0211de20) is a tilted quad whose placement is not understood yet; the port keeps its flat sea.
 
+### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
+
+- **0c, boosters pushing sideways** (`dsTrack::PieceRotationAt`, game logic): main 0x0208cb80 adds half a cell to x
+  and z before dividing by the cell size (grid +0x40c = (cellWidth >> 1) << 12, set by main 0x0208da98); the port
+  did not, so the boost direction (material 7, from the piece rotation) came from the neighbouring piece depending
+  on where the car touched the pad. Overlapping footprints (a loop over a booster beside it), which the game settles
+  with its per-cell grid bytes, give the piece with booster surfaces. Checked on the 152 booster surface points of
+  the 26 tracks (90 wrong before, 0 after; throw-away test). The 114 checks are unchanged (no check run crosses a
+  booster at a wrong spot); the auto-drive trajectories of check_culling changed on some tracks.
+- **0b, rear lights** (car `lod1` materials `blight` / `rlight` / `hlight`, a5i3 glow texture): the game draws these
+  shapes through material controllers (created by main 0x0206b0xx from the names; itcm 0x01fff814 draws a shape
+  only while its light level is not 0, 0x01fff858 sets the polygon alpha to the level and DIF_AMB = SPE_EMI = the
+  light colour: brake red 0x1f, reverse and head white). The levels are three bytes of the car model's light
+  struct (`*(model + 0x18)` +4/+5/+6, zeroed by ov003 0x020fd914): the brake light ramps by 3 per frame between the
+  visual's +0x104 = 0 and +0x105 = 0x10 (ov003 0x020fcdf0), the reverse light between 0 and 0x18 (0x020fcda4); the
+  human player's update (0x0210ed9c) turns the brake light on while braking forwards (pad +0x99) or accelerating in
+  reverse (+0x98, engine gear < 0) and the reverse light while the gear is negative; the head lights stay off in a
+  race. The port drew the three glows always, opaque-first order mixed with depth writes. Now: `dsCarLights`
+  (game code) + `G3Model::overrides` / `ApplyOverride` (both back-ends), applied by `RaceSession::ApplyCarLights`
+  after every frame; and every model is drawn in two passes as the DS orders polygons, opaque then translucent
+  (polygon alpha < 31 or a texture with partial alpha) without depth writes (POLYGON_ATTR bit 11 is clear in these
+  materials). `tm_race --auto --brake-from F` shows the brake lights.
+- **0a, sky showing below the scenery**: the PSP sea was 24 x 24 tiles of 24 units around the eye: no splitting near
+  the camera (the GE drops a triangle whose vertex leaves its guard band, as the track did before
+  `G3_GU_MAX_EDGE`) and only +-288 units of sea while the far plane is at 600, so the sky dome showed below the
+  horizon and in the sea inlets between cliffs. Now 7 nested rings of 16 x 16 tiles (3 units within at least 18
+  units of the eye, doubling per ring, +-1536 units), rows as triangle strips (3,136 vertices, 50 KB of display
+  list). The terrain itself matches the game (`tm_trackdump --terrain` also prints the ground-level cell map now:
+  the enclosed empty cells are sea inlets, as on the DS).
+- **Host fix found by check_culling**: shapes without TEXCOORD used GL's current texture coordinate left by the
+  last piece drawn (a black part of the car changed colour with culling); each shape now starts at (0, 0) as the
+  PSP arrays do.
+
 ## Bilan de la phase 5, run 1 (rapport, 2026-10-19)
 
 **Priorités 1 et 2 terminées, priorité 3 en partie.** Tout est vérifié dans PPSSPP et sur l'hôte ; la vitesse et

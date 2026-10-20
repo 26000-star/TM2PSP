@@ -591,6 +591,22 @@ void G3Model::BorrowTextures(const G3Model &from)
 // main 0x02055970 (the colour part): set 0 for track models (renderer flag +0x70), set 1 for the car (+0x71).
 // @port main:02055970 partial (colours, light masks, alpha and fog; polygon IDs and the shadow-volume modes of the
 // "shadowback" / "shadowfront" materials are left out)
+// @port itcm:01fff858 partial (material controller: alpha and colours; the polygon ID 0x31 - light is not used)
+bool G3Model::ApplyOverride(int material, G3Lit *lit, u32 &dif, u32 &alpha) const
+{
+    if (material < 0 || material >= (int)overrides.size())
+        return true;
+    const MatOverride &o = overrides[material];
+    if (o.alpha >= 0)
+        alpha = (u32)o.alpha;
+    if (o.color >= 0) {
+        dif = (u32)o.color;
+        if (lit)
+            lit->ambient = lit->diffuse = lit->specular = lit->emission = (u16)o.color;
+    }
+    return !o.hidden;
+}
+
 G3Lit G3ResolveMaterial(const G3Model::Material &m, const G3LightEnv &env, int set)
 {
     const G3LightEnv::Set &s = env.sets[set & 1];

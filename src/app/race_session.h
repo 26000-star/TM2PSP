@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "car/dsCarDynamics.h"
+#include "car/dsCarLights.h"
 #include "car/dsCarParams.h"
 #include "g2d_cells.h"
 #include "g3d_model.h"
@@ -41,6 +42,10 @@ struct RaceSession {
     dsHud hud;
     std::vector<fx32> recordSplits;
     fx32 recordTime = 0;
+    // The car's brake / reverse / head lights (dsCarLights) and the carModel materials they control ("blight",
+    // "rlight", "hlight"; -1: absent), applied as G3Model overrides after every frame.
+    dsCarLights carLights;
+    int carLightMaterial[3] = {-1, -1, -1};
 
     // The track's collision shapes leave the collision world with the track; the drivers clear the world's mesh
     // cache after deleting a session (RaceUnloadWorld) so that reloading tracks does not grow the heap.
@@ -49,6 +54,7 @@ struct RaceSession {
     // One 30 Hz frame: two 1/60 s ticks of the race with this input, events printed to stdout, the camera reset on
     // restart/respawn and updated once.
     void Frame(const dsCarInput &in);
+    void ApplyCarLights();
     // Marks the pieces whose bounding sphere touches the current camera's view frustum (vertical FOV from the
     // camera, aspect w/h, near and far planes as the driver's projection). A port addition for the PSP's GE: the
     // DS draws every piece the race grid gives it.

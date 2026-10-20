@@ -95,7 +95,7 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
 
 void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pass) const
 {
-    bool otherPass = false;
+    bool otherPass = false, hidden = false;
     glFrontFace(G3_FRONT_FACE);
     glPushMatrix();
     float scale = 1;
@@ -119,6 +119,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
         case 1:
             tex = nullptr;
             dif = 0x7fff;
+            hidden = false;
             {
                 const G3Model *src = batchMaterials ? batch : this;
                 if (src && o.a < (int)src->materials.size()) {
@@ -146,6 +147,8 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                         else
                             glDisable(GL_FOG);
                     }
+                    if (src == this)
+                        hidden = !ApplyOverride(o.a, light ? &lit : nullptr, dif, a);
                     alpha = a == 0 ? 1.0f : a / 31.0f;
                 }
             }
@@ -160,7 +163,10 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
             curAlpha = alpha;
             break;
         case 2:
-            if (o.a < (int)shapes.size() && !otherPass) {
+            if (o.a < (int)shapes.size() && !otherPass && !hidden) {
+                // Shapes without TEXCOORD start at (0, 0), as the PSP back-end's arrays (GL's current coordinate
+                // would otherwise leak from the last piece drawn: the culling check caught it on the car).
+                glTexCoord2f(0, 0);
                 GlSink sink(tex);
                 if (light) {
                     sink.light = light;

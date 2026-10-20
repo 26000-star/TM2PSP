@@ -199,6 +199,20 @@ int main(int argc, char **argv)
                    p->info ? p->info->name.c_str() : "?", p->rotation, p->cell[0], p->cell[1], p->cell[2], p->pos.x,
                    p->pos.y, p->pos.z, p->modelPath.c_str());
         }
+        // Ground-level map (x across, z down): '.' empty, 't' terrain piece, '#' placed piece, 'a' empty with a
+        // piece above it.
+        printf("cellmap level 3\n");
+        for (s32 z = 0; z < 22; z++) {
+            for (s32 x = 0; x < 22; x++) {
+                const dsTrackPiece *p = t.PieceAtCell(x, 3, z);
+                char c = p ? (p->autoTerrain ? 't' : '#') : '.';
+                for (s32 y = 4; c == '.' && y < 12; y++)
+                    if (t.PieceAtCell(x, y, z))
+                        c = 'a';
+                putchar(c);
+            }
+            putchar('\n');
+        }
     }
     if (triggers)
         DumpTriggers(t);
