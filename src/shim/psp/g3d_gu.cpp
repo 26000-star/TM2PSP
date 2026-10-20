@@ -422,6 +422,17 @@ void G3Model::DrawPart(int material, int shape, const G3Model *batch) const
 
 void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
 {
+    DrawPass(ops, batch, 0);
+    if (!g_prepareOnly)
+        sceGuDepthMask(GU_TRUE);
+    DrawPass(ops, batch, 1);
+    if (!g_prepareOnly)
+        sceGuDepthMask(GU_FALSE);
+}
+
+void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pass) const
+{
+    bool otherPass = false;
     // prepare: convert the meshes only, no GE command (G3Model::Prepare).
     const bool draw = !g_prepareOnly;
     if (!backend)
@@ -501,7 +512,8 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             } else {
                 src = nullptr;
             }
-            if (!draw) {
+            otherPass = (alpha < 1.0f || (tex && tex->translucent)) != (pass == 1);
+            if (!draw || otherPass) {
             } else if (tex && tex->gu) {
                 const GuTex *g = (const GuTex *)tex->gu;
                 sceGuEnable(GU_TEXTURE_2D);
@@ -517,7 +529,7 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             }
             break;
         case 2: {
-            if (o.a >= (int)shapes.size() || skip)
+            if (o.a >= (int)shapes.size() || skip || otherPass)
                 break;
             // Lit colours depend on the draw's rotation: baked per variant (piece rotation); variant -1 (the car)
             // is converted at every draw into the display list's memory.

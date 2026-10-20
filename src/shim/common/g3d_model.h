@@ -93,7 +93,10 @@ public:
     mutable void *backend = nullptr; // back-end data (PSP: converted shapes)
 
 private:
+    // Two passes as the DS orders polygons: opaque first, then translucent (polygon alpha < 31 or a texture with
+    // partial alpha), the latter without depth writes (POLYGON_ATTR bit 11 clear).
     void DrawOps(const std::vector<Op> &ops, const G3Model *batch) const;
+    void DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pass) const;
 };
 
 // Receives the primitives of a shape display list. Begin's mode is the DS one: 0 triangles, 1 quads,

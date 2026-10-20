@@ -87,6 +87,15 @@ void G3Model::DrawPart(int material, int shape, const G3Model *batch) const
 
 void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
 {
+    DrawPass(ops, batch, 0);
+    glDepthMask(GL_FALSE);
+    DrawPass(ops, batch, 1);
+    glDepthMask(GL_TRUE);
+}
+
+void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pass) const
+{
+    bool otherPass = false;
     glFrontFace(G3_FRONT_FACE);
     glPushMatrix();
     float scale = 1;
@@ -140,6 +149,7 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
                     alpha = a == 0 ? 1.0f : a / 31.0f;
                 }
             }
+            otherPass = (alpha < 1.0f || (tex && tex->translucent)) != (pass == 1);
             if (tex && tex->gl) {
                 glEnable(GL_TEXTURE_2D);
                 glBindTexture(GL_TEXTURE_2D, tex->gl);
@@ -150,7 +160,7 @@ void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
             curAlpha = alpha;
             break;
         case 2:
-            if (o.a < (int)shapes.size()) {
+            if (o.a < (int)shapes.size() && !otherPass) {
                 GlSink sink(tex);
                 if (light) {
                     sink.light = light;
