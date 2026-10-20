@@ -653,10 +653,14 @@ Found in the code (names in `config/names/phase5_render.txt`):
   (2048, -6757, 2048), all white (`+0x28`, itcm 0x01ff90dc); **colour set 0 = colours 1, 2, 3 with light mask 3,
   set 1 = colours 5, 6, 7 with mask 0xc** (`+0xdc`, main 0x0204ca64, renderer +0x7b8/+0x7f8/+0x838); **colour 0 =
   fog colour** (`+0xe0`, main 0x0204c964: FOG_COLOR, fog on, shift 1, offset 0x60). Colour 4 is not used there.
-- At model load, main 0x02055970 rewrites each material: track models (flag +0x70) take set 0 as ambient /
-  diffuse / specular with the shininess table on, the car (+0x71) set 1 on lights 2 and 3; emission stays the
-  material's; "underside" materials become dark grey, "lights"/"light" translucent (alpha 4), "sky0" materials
-  have no fog. Track pieces and the car carry normals and no vertex colours: **they are lit by the hardware**, which
+- At model load, main 0x02055970 rewrites each material. The model loader main 0x0205600c sets flag +0x70 when the
+  resource name (lower-cased by main 0x02045904) contains "cars", +0x71 when it contains "tracks" or "misc": **car
+  models take set 0** as ambient / diffuse / specular with the shininess table on, polygon ID 2 (the ID of their
+  shadow volume, which therefore never darkens them), "underside" dark grey and "lights"/"light" translucent (alpha
+  4); **track and misc models take set 1** on lights 2 and 3 for every material ("snowsnow" without specular);
+  other models keep their colours, with "shadowback" / "shadowfront" turned into shadow volumes (ID 3). Emission
+  stays the material's; "sky0" materials have no fog. (Run 1 read the two flags the other way round, lighting the
+  track with set 0 and the car with set 1; fixed in step 5b.) Track pieces and the car carry normals and no vertex colours: **they are lit by the hardware**, which
   the port drew flat until now.
 - Renderer init (main 0x0204f528): shininess table `(2i+1)^9 / 256^8`, fog table 0, 4, ... 124 over 32 entries,
   `SWAP_BUFFERS = 2` (W-buffering); every frame (itcm 0x01ff9628) `G3X_SetFog(on, mode 0, 1, 0x60)`.
@@ -686,10 +690,10 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
   Every frame the visual update ov003 0x02126d10 (`dsCarDynamics::UpdateVisual`, already ported) computes the wheel
   matrices (spin, steering on the front pair, hub position with the suspension) and ov003 0x020fbe48 stores them in
   the visual, whose draw copies them into the wheel nodes. `RaceSession::CarDraws` returns the body (lod1) and the
-  four wheels with those matrices, lit with colour set 1 (relit every frame on the PSP, 56 vertices per wheel). Hubs
+  four wheels with those matrices, lit with colour set 0 (relit every frame on the PSP, 56 vertices per wheel). Hubs
   check: +-0.8 across, +-1.4 along, 0.35 up in car space (wheel radius 0.33), inside lod1's wheel arches.
 - The shadow is `Cars/<env>/shadow.n`, a closed car-shaped volume drawn as DS shadow polygons (the stencil-like
-  shadow volume of the geometry engine): not reproduced (it needs a stencil pass on both back-ends).
+  shadow volume of the geometry engine): not reproduced then (done in step 5a, with the stencil buffer).
 - `lod0` holds the same wheels at fixed places plus light cones and a flat shadow: it is the close-up model of the
   shop / replays, not used here.
 
@@ -755,10 +759,62 @@ below 3 (0x020fbf20 area). Its draw (itcm 0x01ffc7a4) sends the shapes twice: sh
 both faces, ID 2). Port: `G3Model::DrawShadowVolume` with the stencil buffer on both back-ends (host: an 8-bit
 stencil requested from SDL; PSP: the stencil in the alpha bits of the 8888 frame buffer, RGB masked in the mask
 pass, cleared with `sceGuClear(GU_STENCIL_BUFFER_BIT)`): stencil set where back faces fail the depth test, then
-colour where it is set and the depth test passes, once per pixel (stencil zeroed). Colour: the material's diffuse
-0x318c unlit (port reading; the DS lights it), alpha 14/31. From the chase camera most of it lies under the car,
+colour where it is set and the depth test passes, once per pixel (stencil zeroed). Colour: both passes clear the
+light enables of the material's POLYGON_ATTR and every vertex of the shapes follows a NORMAL command, so the DS sets
+the vertex colour to the material's emission (0: black), not its diffuse 0x318c (the first port reading, a grey
+shadow on the PSP-3000); alpha 14/31. From the chase camera most of it lies under the car,
 as on the DS. The alpha test made the mask pass depend on the last colour set: the mask pass now sets an opaque
 colour first.
+
+### Step 5b: black shadow, car and track lighting sets (done; console test pending)
+
+Reported on the PSP-3000: the shadow was grey. Two readings of main 0x02055970 were wrong:
+
+- **Colour**: see step 5a; the shadow volume is drawn black (the material's emission) at alpha 14/31.
+- **Model flags**: the model loader main 0x0205600c sets +0x70 when the resource name contains "cars" and +0x71 for
+  "tracks" / "misc" (`strstr`, main 0x02019710, on a name lower-cased by main 0x02045904); run 1 had them the other
+  way round. So the car takes colour set 0 (lights 0 and 1, shininess table) and polygon ID 2, the track set 1
+  (lights 2 and 3): `RaceSession::CarLight` / `PieceLight` swapped. The walls that faced away from lights 0 and 1
+  were black on the host and the PSP; they are now lit, and the car takes the time-of-day tint of set 0.
+- **Polygon ID**: a DS shadow polygon is drawn only where the attribute buffer holds another polygon ID (GBATEK
+  "Shadow Polygons"); the car's materials and the shadow both have ID 2, so the shadow darkens the track and never
+  the car. Port: both drivers draw the volume after the track and before the car and wheels (which then cover it
+  where they are in front, as the ID rule does); before, the volume greyed the lower half of the body.
+
+### Step 5c: the HUD messages (done; console test pending)
+
+The missing piece of run 3 was in the scripts: **`Scripts/config/ui` defines the fonts** (`font20_White` ...
+`font40_Orange`: `resource`, `height`, `spaceWidth`, `upperCaseOnly`, `glyphs = {{character, width}, ...}`), and
+glyph i is cell i (148 glyphs: '!'..'~', then Latin-1 ¡ © ® ° ¿ À..ü). The font manager (main 0x02085528, `*0x020d35cc`)
+loads twelve slots from the names at 0x020bfa08 (font20/28/32/40_White, three times) with Fonts/Cell/Font as the
+palette resource; the font object (0x0207f01c) keeps per byte the advance (width + 1 pixel) and the cell (0xff:
+none), and the space width.
+
+- **Text layout** (main 0x0207e9f8, called by the text object 0x020840e4 / set-text 0x02083f38): one glyph per
+  character with a cell, advance `d2i(i2d(w << 12) + 0.5)`; a space only advances; '\n' breaks the line; another
+  character without a cell is drawn as '1' (font +0x145). When a glyph passes the wrap width, the line breaks at its
+  last space (the word moves down) or before that glyph; lines are aligned left / centred / right
+  (`-w / 2` truncated), then the block top / centred / bottom (`height - h / 2` for centred).
+- **Messages** (HUD +0x3c, init 0x0210982c): three text objects at (128, 102), centred both ways, 252 wide: +0x0c
+  font slot 0 palette 7 (always "" in the solo race), +0x10 slot 1 (Font28_White) palette 0, +0x14 slot 1 palette 1
+  moved by the vector at ov003 0x0213784c = (1, 1) (`__sinit` 0x02135280), drawn under the white text. Palettes
+  of Font.NCLR: 0 white, 1 dark grey. Shown for 0x78 frames by 0x02109658 (the network modes move them first),
+  hidden by 0x02109610 and by the HUD's display switch (0x02102a60, pause / finish / restart).
+- **Triggers**: the HUD update shows `FreeWheeling` on entering a free-wheel zone (the car's +0x4e8, set by surface
+  8 and cleared by a respawn) and hides it on leaving; the race mode's finish (0x02115704) calls 0x02104620 with
+  the number of checkpoints missed: `CheckpointMissed` (1) or `CheckpointsMissed`, formatted by vsnprintf.
+- **Language**: `*0x020d35a4` picks gb, us, fr, it, de, es (0x020bf7d0). Port: the PSP's system language (English
+  -> gb), `tm_race --lang xx` on the host (default gb).
+- The backing's panel +0x14 is not the messages' (run 3 note): 0x02101e28 is called by another HUD part
+  (0x02109b3c / 0x02109c8c), not the solo race.
+
+Port: `dsStringTable` (`src/game/text`, main 0x0207e4a0..0x0207e908), `dsFont` / `dsFontManager` / `dsTextLayout`,
+`dsHud::ShowMessage` / `HideMessage`: the glyphs become HUD sprites of two new banks (Font28_White's 148 cells in
+palette 0 and 1: `G2CellBank::Load` takes a palette that replaces the OAM entries', as the text sprites' +0x45
+does). The host's red stand-in text for missed checkpoints is gone. Checks: `tm_race --missed-at F` /
+`--free-wheel-at F` (host) and `race_shot.ps1 -Screen missed|freewheel` (PPSSPP) show "Vous avez manqué 2
+checkpoints." on two lines (289 pixels > 252) and "Roue libre !"; the PSP heap grows by 0.6 MB (two 256 x 512
+16-bit atlases and the strings).
 
 ### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
 
@@ -803,6 +859,9 @@ colour first.
   PSP arrays do.
 
 ### Not done in run 3: HUD messages, sound, sea backdrop (findings for the next run)
+
+(The HUD messages are done in step 5c, which corrects two points below: the character map is in config/ui, and
+the backing's panel +0x14 belongs to another HUD part.)
 
 - **HUD messages** (+0x3c, update 0x021097d4, show 0x02109658 / by key 0x02109778): three text objects of the
   game's text engine (main 0x0208547c(font manager *0x020d35cc, text, x 128, y 102, ..., width 252): +0x0c font 0

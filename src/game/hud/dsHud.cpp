@@ -1,7 +1,11 @@
 // Race HUD (see dsHud.h). Positions are the game's, in fx32 DS pixels.
 #include "hud/dsHud.h"
 
+#include <stdio.h>
+
 #include "race/dsRaceProgress.h"
+#include "text/dsFont.h"
+#include "text/dsStringTable.h"
 
 namespace {
 
@@ -23,6 +27,11 @@ const int FONT_ZERO = 0xf, FONT_COLON = 0x19, FONT_DASH = 0xc;
 // the speedometer (70 pixels wide), baseline at y = 28 (its digits span 12..28, the first split row).
 const fx32 CLOCK_X = (252 - 70) * PX, CLOCK_Y = 28 * PX;
 
+// Messages (0x0210982c): font slot 1, centred at (128, 102) in 252 pixels; the shadow copy is offset by the vector
+// at ov003 0x0213784c ((1, 1), set by __sinit 0x02135280). 0x78 frames.
+const int MSG_FONT = 1, MSG_FRAMES = 0x78;
+const fx32 MSG_X = 128 * PX, MSG_Y = 102 * PX, MSG_WIDTH = 252 * PX, MSG_SHADOW = 1 * PX;
+
 void TimeDigits(fx32 t, int d[6])
 {
     if (t < 0)
@@ -43,7 +52,7 @@ void TimeDigits(fx32 t, int d[6])
 
 } // namespace
 
-void dsHud::BankFiles(int bank, const char **ncer, const char **ncgr, const char **nclr, int *cells)
+void dsHud::BankFiles(int bank, const char **ncer, const char **ncgr, const char **nclr, int *cells, int *palette)
 {
     static const char *const kFiles[HUD_BANK_COUNT][3] = {
         {"graphics/2dsprites/common/hud/cell/hud_small.ncer", "graphics/2dsprites/common/hud/cell/hud_small.ncgr",
@@ -54,11 +63,19 @@ void dsHud::BankFiles(int bank, const char **ncer, const char **ncgr, const char
         {"graphics/2dsprites/common/fonts/cell/font28_white.ncer",
          "graphics/2dsprites/common/fonts/cell/font28_white.ncgr",
          "graphics/2dsprites/common/hud/cell/hud_ui_palette.nclr"},
+        // text: font slot 1's resource with the font manager's palette (Fonts/Cell/Font)
+        {"graphics/2dsprites/common/fonts/cell/font28_white.ncer",
+         "graphics/2dsprites/common/fonts/cell/font28_white.ncgr",
+         "graphics/2dsprites/common/fonts/cell/font.nclr"},
+        {"graphics/2dsprites/common/fonts/cell/font28_white.ncer",
+         "graphics/2dsprites/common/fonts/cell/font28_white.ncgr",
+         "graphics/2dsprites/common/fonts/cell/font.nclr"},
     };
     *ncer = kFiles[bank][0];
     *ncgr = kFiles[bank][1];
     *nclr = kFiles[bank][2];
     *cells = bank == HUD_BANK_FONT28 ? FONT_COLON + 1 : 0; // the clock's characters: '-', digits, ':'
+    *palette = bank == HUD_BANK_TEXT ? 0 : bank == HUD_BANK_TEXT_SHADOW ? 1 : -1;
 }
 
 // @port ov003:02103958 partial (solo race parts only) / ov003:02105ca8 done / ov003:02105fac done /
@@ -108,6 +125,11 @@ void dsHud::Init(int lapCount)
     m_clockShown = true;
     m_events = 0;
     splits.clear();
+    // +0x3c messages: no text yet.
+    m_msgFirst = sprites.size();
+    m_msgTimer = 0;
+    m_freeWheel = false;
+    message.clear();
 
     // Lap counter (0x02108d70, only for 2 laps or more): the total right-aligned at x = 33 (two digits: at 50),
     // '/' 6 pixels left of it, the current lap right-aligned on the '/'.
@@ -248,9 +270,10 @@ void dsHud::ClockLayout(fx32 t, bool dashes)
 
 // @port ov003:02102e9c partial (solo race parts) / ov003:02105b78 done / ov003:02105de8 done /
 // ov003:0210908c partial (normal counter) / ov003:02105408 done (display) / ov003:02104a6c partial (restart:
-// splits hidden, countdown on) / ov003:02104670 partial (finish: split against the record time, clock blinks)
-void dsHud::Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::vector<fx32> &recordSplits,
-                   fx32 recordTime)
+// splits hidden, countdown on) / ov003:02104670 partial (finish: split against the record time, clock blinks) /
+// ov003:02104620 done (as the MISSED event)
+void dsHud::Update(const dsRaceProgress &rp, fx32 speed, bool freeWheeling, int ticks,
+                   const std::vector<fx32> &recordSplits, fx32 recordTime)
 {
     if (sprites.empty())
         return;
@@ -270,6 +293,7 @@ void dsHud::Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::v
             m_cdState = -1;
             m_cdCounter = 0x3c;
             splits.clear();
+            HideMessage(); // the HUD's display switch (0x02102a60 / 0x02102034) hides it around a restart
         } else if (ev.type == dsRaceEvent::CHECKPOINT) {
             size_t k = splits.size();
             splits.push_back(ev.time);
@@ -279,7 +303,23 @@ void dsHud::Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::v
         } else if (ev.type == dsRaceEvent::FINISH) {
             ShowSplit(rp.finishTime, recordTime > 0, recordTime);
             m_blink = 1000; // 0x0210538c(clock, 1000)
+        } else if (ev.type == dsRaceEvent::MISSED) {
+            // 0x02104620: "You missed %d checkpoint(s)."
+            const char *fmt = dsStringTable::Get()->Text(ev.value == 1 ? "CheckpointMissed" : "CheckpointsMissed");
+            char text[200];
+            snprintf(text, sizeof text, fmt, ev.value);
+            ShowMessage(text, MSG_FRAMES);
         }
+    }
+    // Free-wheel zone: the message once on entry, hidden on exit.
+    if (!freeWheeling) {
+        if (m_freeWheel) {
+            HideMessage();
+            m_freeWheel = false;
+        }
+    } else if (!m_freeWheel) {
+        ShowMessage(dsStringTable::Get()->Text("FreeWheeling"), MSG_FRAMES);
+        m_freeWheel = true;
     }
 
     // Speedometer: |velocity| x 3.6, right-aligned from x = 252, leading zeros hidden.
@@ -310,6 +350,9 @@ void dsHud::Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::v
         if (cur != m_lapCur)
             LapLayoutCurrent(cur);
     }
+    // Message time-out (0x021097d4).
+    if (m_msgTimer > 0 && --m_msgTimer == 0)
+        HideMessage();
     // Clock: blinking for 1000 frames after the finish (every 10 frames), then the digits.
     if (m_blink) {
         m_blink--;
@@ -360,6 +403,34 @@ void dsHud::Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::v
         Show(m_line[1], false);
         m_splitOn = false;
     }
+}
+
+// Both text objects take the text (laid out by 0x0207e9f8 with their alignment and width) and are shown; the
+// glyphs become sprites, the shadow copy first so that the white text covers it.
+// @port ov003:02109658 partial (the network modes' placement is left out) / ov003:02109778 done
+void dsHud::ShowMessage(const char *text, int frames)
+{
+    sprites.resize(m_msgFirst);
+    const dsFont *font = dsFontManager::Get()->Font(MSG_FONT);
+    if (font) {
+        std::vector<dsGlyph> g = dsTextLayout(*font, text, 0, 0, 1, 1, MSG_WIDTH);
+        for (int pass = 0; pass < 2; pass++) {
+            fx32 ox = MSG_X + (pass ? 0 : MSG_SHADOW), oy = MSG_Y + (pass ? 0 : MSG_SHADOW);
+            u8 bank = pass ? HUD_BANK_TEXT : HUD_BANK_TEXT_SHADOW;
+            for (const dsGlyph &e : g)
+                sprites.push_back({bank, true, (s16)e.cell, ox + e.x, oy + e.y, 0});
+        }
+    }
+    m_msgTimer = frames;
+    message = text;
+}
+
+// @port ov003:02109610 done / ov003:021097d4 done (in Update)
+void dsHud::HideMessage()
+{
+    sprites.resize(m_msgFirst);
+    m_msgTimer = 0;
+    message.clear();
 }
 
 // The backing object (ctor 0x02131068) keeps +0x14 message panel, +0x15 laps (the counter's flag +0x28), +0x16

@@ -233,8 +233,10 @@ folder to the root of a memory stick (custom firmware needed). Real-hardware spe
   shininess table) in common code for both back-ends, the fog, the sky dome of the track's time of day, and the car
   wheels from the game's wheel models and matrices; the game's HUD as sprites (countdown, speed, laps, split times
   against the record, clock), the car's brake and reverse lights, the arrow signs' scrolling texture animation.
-  The HUD's backing panels and the car's shadow volume (stencil) too. Still to do: the HUD's text messages, the
-  animated sea backdrop and the sound.
+  The HUD's backing panels and the car's black shadow volume (stencil) too; the car is lit with colour set 0 and the
+  track with set 1, as the game's model flags say. The HUD's text messages ("free wheeling", checkpoints missed)
+  with the game's fonts, text layout and localised strings (console language). Still to do: the animated sea
+  backdrop and the sound.
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/psp/reload_test.ps1

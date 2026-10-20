@@ -57,7 +57,7 @@ struct Oam {
 } // namespace
 
 bool G2CellBank::Load(const std::vector<u8> &ncgr, const std::vector<u8> &ncer, const std::vector<u8> &nclr,
-                      int maxCells)
+                      int maxCells, int palette)
 {
     cells.clear();
     pixels.clear();
@@ -116,7 +116,7 @@ bool G2CellBank::Load(const std::vector<u8> &ncgr, const std::vector<u8> &ncer, 
             e.w = kObjSize[shape][size][0];
             e.h = kObjSize[shape][size][1];
             e.tile = a2 & 0x3ff;
-            e.pal = a2 >> 12;
+            e.pal = palette >= 0 ? palette : a2 >> 12;
             bool affine = a0 & 0x100;
             e.hf = !affine && (a1 & 0x1000);
             e.vf = !affine && (a1 & 0x2000);

@@ -126,6 +126,17 @@ int dsLuaObject::FieldNumber(const char *name) const
     return v;
 }
 
+// @port main:02069100 done
+bool dsLuaObject::FieldBool(const char *name) const
+{
+    lua_rawgeti(m_L, LUA_REGISTRYINDEX, m_ref);
+    lua_pushstring(m_L, name);
+    lua_gettable(m_L, -2);
+    bool v = lua_toboolean(m_L, -1) != 0;
+    lua_settop(m_L, -3);
+    return v;
+}
+
 // @port main:02069230 done
 int dsLuaObject::IndexNumber(int i) const
 {

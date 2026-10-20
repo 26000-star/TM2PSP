@@ -24,10 +24,12 @@
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspkernel.h>
+#include <psputility.h>
 
 #include "fs/dsFileSystem.h"
 #include "nitro.h"
 #include "race_app.h"
+#include "text/dsStringTable.h"
 
 PSP_MODULE_INFO("TM2PSP", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -261,6 +263,17 @@ void DrawRace(RaceSession &race)
         pc.first->Draw(race.batch);
         sceGumPopMatrix();
     }
+    G3SetDrawLight(nullptr);
+    // The car's shadow volume, after the track and before the car: the game gives the car models polygon ID 2
+    // (main 0x02055970), the shadow's, so the DS draws the shadow on the track only.
+    u16 shadowColor;
+    int shadowAlpha;
+    if (race.ShadowDraw(g, &shadowColor, &shadowAlpha)) {
+        sceGumPushMatrix();
+        sceGumMultMatrix((const ScePspFMatrix4 *)g);
+        race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
+        sceGumPopMatrix();
+    }
     RaceSession::Draw cd[5];
     for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
         sceGumPushMatrix();
@@ -270,15 +283,6 @@ void DrawRace(RaceSession &race)
         sceGumPopMatrix();
     }
     G3SetDrawLight(nullptr);
-    // The car's shadow volume, after the opaque scene (it darkens what lies inside it).
-    u16 shadowColor;
-    int shadowAlpha;
-    if (race.ShadowDraw(g, &shadowColor, &shadowAlpha)) {
-        sceGumPushMatrix();
-        sceGumMultMatrix((const ScePspFMatrix4 *)g);
-        race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
-        sceGumPopMatrix();
-    }
 }
 
 // Flat rectangle (menu panels), alpha blended.
@@ -436,6 +440,18 @@ int main(int argc, char **argv)
     FSh_SetRoot((dir + "/files").c_str());
     dsFileSystem::Create();
     dsFileSystem::Get()->EnableVfs(true);
+    // The race's strings in the console's language (the DS takes the firmware's), English as gb.
+    int sysLang = PSP_SYSTEMPARAM_LANGUAGE_ENGLISH, language = dsStringTable::LANG_GB;
+    sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_LANGUAGE, &sysLang);
+    if (sysLang == PSP_SYSTEMPARAM_LANGUAGE_FRENCH)
+        language = dsStringTable::LANG_FR;
+    else if (sysLang == PSP_SYSTEMPARAM_LANGUAGE_GERMAN)
+        language = dsStringTable::LANG_DE;
+    else if (sysLang == PSP_SYSTEMPARAM_LANGUAGE_ITALIAN)
+        language = dsStringTable::LANG_IT;
+    else if (sysLang == PSP_SYSTEMPARAM_LANGUAGE_SPANISH)
+        language = dsStringTable::LANG_ES;
+    dsStringTable::Get()->Load(language, dsStringTable::FILE_BACKEND);
 
     // Track menu first (RaceApp); best times and the last track in save.txt next to the EBOOT. track.txt only
     // places the cursor when there is no save file yet. The scripted runs (auto.txt, reload.txt) write no save.
@@ -533,8 +549,16 @@ int main(int argc, char **argv)
             steer = -FX32_ONE;
         in.steer = -steer; // the game's steer is positive to the left (seen on a real PSP-3000)
 
-        // auto.txt "<track> <frames> pause|result": that menu is opened for the last frame (layout check only).
-        if (autoFrames >= 0 && frame == autoFrames - 1 && app.race && autoScreen[0])
+        // auto.txt "<track> <frames> pause|result": that menu is opened for the last frame (layout check only);
+        // "missed" / "freewheel": a HUD message 10 frames before the shot (as tm_race --missed-at / --free-wheel-at).
+        bool msgTest = !strcmp(autoScreen, "missed") || !strcmp(autoScreen, "freewheel");
+        if (autoFrames >= 0 && frame == autoFrames - 10 && app.race && msgTest) {
+            if (autoScreen[0] == 'm')
+                app.race->progress->events.push_back({dsRaceEvent::MISSED, 2, app.race->progress->clock});
+            else
+                app.race->car->noThrottle = true;
+        }
+        if (autoFrames >= 0 && frame == autoFrames - 1 && app.race && autoScreen[0] && !msgTest)
             app.screen = !strcmp(autoScreen, "result") ? RaceApp::RESULT : RaceApp::PAUSED;
         u64 a = Us();
         app.Frame(in);

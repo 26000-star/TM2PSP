@@ -23,9 +23,10 @@ struct G2Cell {
 };
 
 struct G2CellBank {
-    // Decodes the first `maxCells` cells (all when 0). False when a file is malformed.
+    // Decodes the first `maxCells` cells (all when 0), in each OAM entry's palette or, when `palette` >= 0, in
+    // that one (the game's text sprites set it, sprite +0x45). False when a file is malformed.
     bool Load(const std::vector<u8> &ncgr, const std::vector<u8> &ncer, const std::vector<u8> &nclr,
-              int maxCells = 0);
+              int maxCells = 0, int palette = -1);
 
     std::vector<G2Cell> cells;
     int width = 0, height = 0; // atlas size (powers of two)

@@ -3,7 +3,8 @@
 # Installs the EBOOT and extract/files in PPSSPP's memstick (PSP/GAME/TM2PSP, never a real PSP), writes auto.txt,
 # waits for race_log.txt to end with the memory line, converts shot.bmp to PNG, and compares the "frame"/"camera"
 # lines with `tm_race --frames N --auto` on the host (same game code: they must be identical).
-# -Screen menu (with -Track menu) / pause / result: captures that menu instead (no comparison with the host).
+# -Screen menu (with -Track menu) / pause / result: captures that menu instead (no comparison with the host);
+# -Screen missed / freewheel: a HUD message 10 frames before the shot (no comparison either).
 param([string]$Track = 'easy/0', [int]$Frames = 150, [string]$Out = 'build\psp\race_shot.png', [int]$Timeout = 300,
       [string]$Screen = '')
 $ErrorActionPreference = 'Stop'

@@ -38,3 +38,27 @@ ov003:02130e1c dsHudBacking_Draw
 ov003:02130e04 dsHudBacking_SetLapsWide
 ov003:02101e28 dsHudBacking_SetMessage
 itcm:01fffd4c dsDraw_Quad2D
+# messages +0x3c and the text engine (step 5c)
+ov003:0210982c dsHudMessage_Init
+ov003:02109658 dsHudMessage_Show
+ov003:02109778 dsHudMessage_ShowKey
+ov003:021097d4 dsHudMessage_Update
+ov003:02109610 dsHudMessage_Hide
+ov003:02104620 dsHud_CheckpointsMissed
+ov003:0210e9f0 dsPlayer_IsFreeWheeling
+ov003:02102034 dsHud_SetDisplay
+ov003:02102a60 dsHud_DisplayOff
+main:020840e4 dsText_ctor
+main:02083f38 dsText_SetText
+main:020803e8 dsText_SetPalette
+main:020806fc dsText_SetPosition
+main:0207e9f8 dsText_Layout
+main:0207f01c dsFont_ctor
+main:02085528 dsFontManager_Load
+main:0207e7bc dsStringTable_LoadTokens
+main:0207e724 dsStringTable_Load
+main:0207e5a0 dsStringTable_LoadStrings
+main:0207e4c4 dsStringTable_Find
+main:0207e4a0 dsStringTable_Text
+main:0207e680 dsStringTable_LanguageCode
+main:02069100 dsLuaObject_FieldBool

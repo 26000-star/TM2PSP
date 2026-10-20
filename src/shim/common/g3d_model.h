@@ -163,8 +163,8 @@ void G3DecodeShape(const std::vector<u8> &dl, G3ShapeSink &sink);
 
 // ---- DS lighting: the geometry engine's lighting equation (GBATEK) with the race renderer's settings ----
 // The game sets four directional lights and two colour sets (ov003 0x0211dc68 from Scripts/config/tracks), and
-// at model load overrides the materials (main 0x02055970): track models take set 0 (lights 0 and 1), the car
-// set 1 (lights 2 and 3). Colours are RGB555 as on the DS.
+// at model load overrides the materials (main 0x02055970): car models ("cars" in the resource name) take set 0
+// (lights 0 and 1), track and misc models set 1 (lights 2 and 3). Colours are RGB555 as on the DS.
 struct G3LightEnv {
     struct Light {
         float dir[3] = {0, -1, 0}; // world-space unit vector (the direction the light travels)
@@ -200,7 +200,7 @@ u16 G3LightVertex(const G3Lit &l, const G3LightEnv &env, const float *n, const f
 // Lighting of the next draws (G3SetDrawLight(nullptr): unlit, material colours as before).
 struct G3DrawLight {
     const G3LightEnv *env = nullptr;
-    int set = 0;                   // 0: track pieces, 1: car
+    int set = 0;                   // 0: car, 1: track pieces
     float rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1}; // model -> world rotation, column-major
     float eye[3] = {0, 0, -1};
     bool specular = false;

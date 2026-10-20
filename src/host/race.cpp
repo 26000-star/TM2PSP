@@ -28,6 +28,7 @@
 #include "g3d_gl.h"
 #include "nitro.h"
 #include "race_app.h"
+#include "text/dsStringTable.h"
 #include "track/dsPieceData.h"
 
 static void LookAt(const float *eye, const float *at, const float *up)
@@ -180,6 +181,17 @@ static void DrawRace(RaceSession &race, int w, int h)
         pc.first->Draw(race.batch);
         glPopMatrix();
     }
+    G3SetDrawLight(nullptr);
+    // The car's shadow volume, after the track and before the car: the game gives the car models polygon ID 2
+    // (main 0x02055970), the shadow's, so the DS draws the shadow on the track only.
+    u16 shadowColor;
+    int shadowAlpha;
+    if (race.ShadowDraw(g, &shadowColor, &shadowAlpha)) {
+        glPushMatrix();
+        glMultMatrixf(g);
+        race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
+        glPopMatrix();
+    }
     RaceSession::Draw cd[5];
     for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
         glPushMatrix();
@@ -189,15 +201,6 @@ static void DrawRace(RaceSession &race, int w, int h)
         glPopMatrix();
     }
     G3SetDrawLight(nullptr);
-    // The car's shadow volume, after the opaque scene (it darkens what lies inside it).
-    u16 shadowColor;
-    int shadowAlpha;
-    if (race.ShadowDraw(g, &shadowColor, &shadowAlpha)) {
-        glPushMatrix();
-        glMultMatrixf(g);
-        race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
-        glPopMatrix();
-    }
 }
 
 // HUD stand-in text: 5 x 7 glyphs as GL quads, with a shadow.
@@ -324,7 +327,8 @@ int main(int argc, char **argv)
 {
     const char *root = "extract/files", *trackName = nullptr, *shot = nullptr, *save = nullptr,
                *screen = nullptr;
-    int frames = -1, finishAt = -1, brakeFrom = -1;
+    int frames = -1, finishAt = -1, brakeFrom = -1, language = dsStringTable::LANG_GB, missedAt = -1,
+        freeWheelAt = -1;
     bool autoDrive = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
@@ -351,8 +355,19 @@ int main(int argc, char **argv)
             autoDrive = true;
         else if (!strcmp(argv[i], "--brake-from") && i + 1 < argc) // auto drive: brake instead from that frame
             brakeFrom = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--missed-at") && i + 1 < argc) // HUD test: "2 checkpoints missed" at that frame
+            missedAt = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--free-wheel-at") && i + 1 < argc) // HUD test: free-wheel zone from that frame
+            freeWheelAt = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) { // strings: gb (default), us, fr, it, de, es
+            static const char *const kLang[] = {"gb", "us", "fr", "it", "de", "es"};
+            const char *l = argv[++i];
+            for (int k = 0; k < dsStringTable::LANG_COUNT; k++)
+                if (!strcmp(l, kLang[k]))
+                    language = k;
+        }
         else {
-            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result]\n");
+            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result] [--lang fr] [--missed-at F] [--free-wheel-at F]\n");
             return 2;
         }
     }
@@ -360,6 +375,7 @@ int main(int argc, char **argv)
     FSh_SetRoot(root);
     dsFileSystem::Create();
     dsFileSystem::Get()->EnableVfs(true);
+    dsStringTable::Get()->Load(language, dsStringTable::FILE_BACKEND); // the race's strings (HUD messages)
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -454,6 +470,10 @@ int main(int argc, char **argv)
             app.race->progress->finished = true;
             app.race->progress->finishTime = app.race->progress->clock;
         }
+        if (frame == missedAt && app.race)
+            app.race->progress->events.push_back({dsRaceEvent::MISSED, 2, app.race->progress->clock});
+        if (frame == freeWheelAt && app.race)
+            app.race->car->noThrottle = true;
         app.Frame(in);
         if (app.race) {
             UpdateTitle(win, *app.race->progress);

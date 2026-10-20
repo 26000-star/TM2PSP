@@ -68,7 +68,7 @@ if(TM_PLATFORM STREQUAL psp)
   target_include_directories(tm_race PRIVATE src/app src/shim/common)
   # newlib's int32_t is long on the Allegrex (same 32 bits as int): %d on s32/fx32 is harmless there.
   target_compile_options(tm_race PRIVATE -Wall -Wno-unused-parameter -Wno-format)
-  target_link_libraries(tm_race PRIVATE tm_game pspgum pspgu pspdmac)
+  target_link_libraries(tm_race PRIVATE tm_game pspgum pspgu pspdmac psputility)
   create_pbp_file(TARGET tm_race TITLE "TM2PSP - TrackMania Coast" MEMSIZE 1
                   OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/tm_race_pbp)
 endif()

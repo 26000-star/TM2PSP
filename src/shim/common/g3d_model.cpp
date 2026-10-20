@@ -757,7 +757,8 @@ G3Lit G3ResolveMaterial(const G3Model::Material &m, const G3LightEnv &env, int s
     const std::string &n = m.name;
     r.fog = n.compare(0, 4, "sky0") && n.compare(0, 4, "Sky0") && n.compare(0, 4, "SKY0");
     if (set == 0) {
-        // Lit materials use the set's lights; "underside" is dark grey, "lights" / "light" translucent (alpha 4).
+        // Car models: lit materials use the set's lights; "underside" is dark grey, "lights" / "light" translucent
+        // (alpha 4).
         r.lit = (m.polyAttr & 15) != 0;
         r.mask = s.mask;
         if (n == "underside") {
@@ -767,7 +768,7 @@ G3Lit G3ResolveMaterial(const G3Model::Material &m, const G3LightEnv &env, int s
             r.alpha = 4;
         }
     } else {
-        // The car: every material on lights 2 and 3; "snowsnow" has no specular.
+        // Track and misc models: every material on lights 2 and 3; "snowsnow" has no specular.
         r.lit = true;
         r.mask = s.mask;
         if (n == "snowsnow" || n == "SnowSnow")

@@ -12,18 +12,28 @@
 //  - +0x130 race clock (0x021057cc / 0x02105094 / 0x02105408): on the DS it is on the bottom screen in Font40;
 //    port deviation: the PSP has one screen, so it is drawn on the race view, top right, in the game's small
 //    clock variant (Font28, the layout of the bottom screen's best/target times).
-//  - +0x128 backing: translucent panels under the speed, laps and split times (BackingQuads).
-// Not ported: the text messages (+0x3c, localised strings; the backing's message panel +0x14 goes with them), the
-// bottom screen (best/target times, retries), the network/ghost modes.
+//  - +0x128 backing: translucent panels under the speed, laps and split times (BackingQuads);
+//  - +0x3c messages (init 0x0210982c, show 0x02109658 / by key 0x02109778, update 0x021097d4, hide 0x02109610):
+//    localised text (dsStringTable) in font slot 1 (Font28_White) centred at (128, 102), 252 pixels wide, palette
+//    0, over a copy in palette 1 one pixel lower right (the vector at ov003 0x0213784c), for 120 frames:
+//    "FreeWheeling" while the car is in a free-wheel zone (dsCarDynamics +0x4e8, from the HUD update) and
+//    "CheckpointMissed" / "CheckpointsMissed" with the count when the finish line is crossed too early (0x02104620).
+//    The third text object (+0x0c, font slot 0, palette 7) only holds "" in the solo race.
+// Not ported: the bottom screen (best/target times, retries), the network/ghost modes and their message placement,
+// the backing's panel +0x14 (shown by another HUD part, 0x02109b3c).
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "nitro.h"
 
 class dsRaceProgress;
 
-enum dsHudBank { HUD_BANK_SMALL, HUD_BANK_SPLIT, HUD_BANK_FONT28, HUD_BANK_COUNT };
+// The text banks are font slot 1's cells (Fonts/Cell/Font28_White, all 148) in the font palettes 0 and 1.
+enum dsHudBank {
+    HUD_BANK_SMALL, HUD_BANK_SPLIT, HUD_BANK_FONT28, HUD_BANK_TEXT, HUD_BANK_TEXT_SHADOW, HUD_BANK_COUNT
+};
 
 struct dsHudSprite {
     u8 bank = HUD_BANK_SMALL;
@@ -44,24 +54,26 @@ struct dsHudQuad {
 
 class dsHud {
 public:
-    // Paths of the banks under the VFS (cells, characters, palette) and the number of cells the HUD uses (0: all),
-    // for the drivers.
-    static void BankFiles(int bank, const char **ncer, const char **ncgr, const char **nclr, int *cells);
+    // Paths of the banks under the VFS (cells, characters, palette), the number of cells the HUD uses (0: all) and
+    // the palette every cell takes (-1: each OAM entry's own), for the drivers.
+    static void BankFiles(int bank, const char **ncer, const char **ncgr, const char **nclr, int *cells,
+                          int *palette);
 
     // HUD init (0x02103958) for a track with `lapCount` laps, then the race display switched on (0x02102bf4).
     void Init(int lapCount);
     // One frame (0x02102e9c) after the race update: new race events (checkpoint, lap, finish, restart), the speed
-    // of the car (its |velocity|, dsCarDynamics +0x384) and the record's split times (in passing order) and finish
-    // time, or none.
-    void Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::vector<fx32> &recordSplits,
-                fx32 recordTime);
+    // of the car (its |velocity|, dsCarDynamics +0x384), whether it is in a free-wheel zone (+0x4e8) and the
+    // record's split times (in passing order) and finish time, or none.
+    void Update(const dsRaceProgress &rp, fx32 speed, bool freeWheeling, int ticks,
+                const std::vector<fx32> &recordSplits, fx32 recordTime);
 
     // The translucent panels drawn under the sprites (0x02130e1c): the speed's, the lap counter's while it is
     // shown, the split times' while they are shown (two lines or one). At most 4; returns the count.
     int BackingQuads(dsHudQuad *out) const;
 
-    std::vector<dsHudSprite> sprites; // every sprite; draw the visible ones
+    std::vector<dsHudSprite> sprites; // every sprite, in drawing order; draw the visible ones
     std::vector<fx32> splits;         // this run's checkpoint / lap times in passing order (for the record)
+    std::string message;              // port: the message shown, "" when none (for the drivers' logs)
 
 private:
     struct SplitLine {     // 0x0210c1ec: 9 sprites
@@ -78,6 +90,8 @@ private:
     void ClockLayout(fx32 t, bool dashes);      // 0x02105094
     void LapLayoutCurrent(int cur);             // the current-lap half of 0x02108d70 / 0x0210908c
     void LapShow(bool on);                      // 0x02109304
+    void ShowMessage(const char *text, int frames); // 0x02109658
+    void HideMessage();                         // 0x02109610
 
     int m_countdown = 0, m_speed = 0, m_laps = 0, m_clock = 0; // first sprite of each part
     // countdown +0x58
@@ -96,4 +110,8 @@ private:
     int m_blink = 0;
     bool m_clockShown = true;
     size_t m_events = 0;
+    // messages +0x3c: the glyph sprites follow the fixed ones (shadow copy first)
+    size_t m_msgFirst = 0;
+    int m_msgTimer = 0;      // +0x40
+    bool m_freeWheel = false; // HUD +0x68: the free-wheel message was shown
 };

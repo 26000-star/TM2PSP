@@ -29,3 +29,7 @@ itcm:01fff858 dsLightMatCtrl_SetMaterial
 main:02055f78 dsModelRes_LoadTexAnim
 itcm:01ffc7a4 dsModel_DrawShadowVolume
 itcm:01ffc994 dsModel_Draw
+# step 5b: model load flags (+0x70 "cars", +0x71 "tracks"/"misc")
+main:0205600c dsModel_Load
+main:02019710 dsStr_Find
+main:02045904 dsResName_Normalize

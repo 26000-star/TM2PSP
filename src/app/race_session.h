@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -38,6 +39,7 @@ struct RaceSession {
     std::vector<std::unique_ptr<G3Model>> models; // owns batch, carModel and the piece models
     std::vector<char> visible;  // per entry of `pieces`, from Cull
     size_t shownEvents = 0, resets = 0;
+    std::string shownMessage; // the HUD message last logged
     // The game's HUD (dsHud): its sprites are drawn by the drivers with the banks of RaceHudBanks. The record's
     // split times (passing order) and finish time are set by the application (none: 0 / empty).
     dsHud hud;
@@ -114,7 +116,7 @@ void RaceHudSprites(int w, int h, const dsHud &hud, RaceSpriteFn sprite, void *u
 typedef void (*RaceRectFn)(float x, float y, float w, float h, float r, float g, float b, float a, void *user);
 void RaceHudBacking(int w, int h, const dsHud &hud, RaceRectFn rect, void *user);
 
-// HUD text stand-in: the race messages (checkpoints missed, finish) in the middle of a w x h screen; `scale`
+// HUD text stand-in: the finish message in the middle of a w x h screen; `scale`
 // multiplies the pixel sizes (1 at 768 x 576). Text is drawn by the callback.
 typedef void (*RaceTextFn)(float x, float y, float px, const char *s, float r, float g, float b, void *user);
 void RaceHudLayout(int w, int h, float scale, const dsRaceProgress &rp, RaceTextFn text, void *user);

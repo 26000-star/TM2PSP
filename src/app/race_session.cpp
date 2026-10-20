@@ -124,7 +124,7 @@ const G3DrawLight *RaceSession::PieceLight(size_t k, G3DrawLight *out) const
         return nullptr;
     *out = G3DrawLight();
     out->env = &lightEnv;
-    out->set = 0;
+    out->set = 1; // track model (main 0x02055970, flag +0x71)
     RotationOf(pieces[k].second->matrix, out->rot);
     out->variant = pieces[k].second->rotation & 3;
     return out;
@@ -136,7 +136,7 @@ const G3DrawLight *RaceSession::CarLight(G3DrawLight *out) const
         return nullptr;
     *out = G3DrawLight();
     out->env = &lightEnv;
-    out->set = 1;
+    out->set = 0; // car model (main 0x02055970, flag +0x70)
     RotationOf(car->matrix, out->rot);
     const MtxFx43 &cm = cams[camIndex].matrix;
     float f[3] = {cm.m[2][0] / 4096.0f, cm.m[2][1] / 4096.0f, cm.m[2][2] / 4096.0f};
@@ -185,8 +185,10 @@ void RaceSession::ApplyCarLights()
 
 // The car visual's update (0x020fc6b4) places the shadow model (+0x10, shown while the car's LOD is below 3,
 // 0x020fbf20 area) at the car's display matrix, moved by the visual's vector +0x88 x 0x11f (never written in the
-// race: zero) and lowered by 0x666 (0.4). Its material "lambert1" gives the colour (DIF 0x318c, the vertex colour
-// unlit: port reading) and the shadow passes keep its polygon alpha 0x0e (itcm 0x01ffc7a4: mask attr | 0x000e0070).
+// race: zero) and lowered by 0x666 (0.4). The draw (itcm 0x01ffc7a4) sends the material "lambert1" with its light
+// enables cleared (mask attr & 0xc0e0ff00 | 0x000e0070, shadow attr & 0xc0ffff30 | 0x020000c0); every vertex follows a
+// NORMAL command, which with no light enabled sets the vertex colour to the emission (SPE_EMI bits 16-30: 0, black),
+// not the diffuse 0x318c. Polygon alpha 0x0e.
 bool RaceSession::ShadowDraw(float *matrix, u16 *rgb555, int *alpha) const
 {
     if (!shadowModel || !car)
@@ -194,7 +196,7 @@ bool RaceSession::ShadowDraw(float *matrix, u16 *rgb555, int *alpha) const
     MtxFx43 m = car->matrix;
     m.m[3][1] -= 0x666;
     RaceMatrix(m, matrix);
-    *rgb555 = shadowModel->materials.empty() ? 0 : (u16)(shadowModel->materials[0].difAmb & 0x7fff);
+    *rgb555 = shadowModel->materials.empty() ? 0 : (u16)((shadowModel->materials[0].specEmi >> 16) & 0x7fff);
     *alpha = 0x0e;
     return true;
 }
@@ -404,7 +406,13 @@ void RaceSession::Frame(const dsCarInput &in)
     // The player's update (0x0210ed9c) sets the lights once per 30 Hz frame from the pad and the engine's gear.
     carLights.Update(in.accel > 0, in.brake > 0, car->engine ? car->engine->gear : 0);
     ApplyCarLights();
-    hud.Update(*progress, car->speed, 2, recordSplits, recordTime); // end of dsRace_Update (0x02113048)
+    // End of dsRace_Update (0x02113048); the HUD reads the free-wheel flag through ov003 0x0210e9f0.
+    hud.Update(*progress, car->speed, car->noThrottle, 2, recordSplits, recordTime);
+    if (hud.message != shownMessage) {
+        shownMessage = hud.message;
+        if (!shownMessage.empty())
+            printf("message \"%s\"\n", shownMessage.c_str());
+    }
 }
 
 G2CellBank *const *RaceHudBanks()
@@ -415,12 +423,12 @@ G2CellBank *const *RaceHudBanks()
         loaded = true;
         for (int b = 0; b < HUD_BANK_COUNT; b++) {
             const char *ncer, *ncgr, *nclr;
-            int cells;
-            dsHud::BankFiles(b, &ncer, &ncgr, &nclr, &cells);
+            int cells, palette;
+            dsHud::BankFiles(b, &ncer, &ncgr, &nclr, &cells, &palette);
             std::vector<u8> e, g, c;
             G2CellBank *bank = new G2CellBank;
             if (RaceReadFile(ncer, &e) && RaceReadFile(ncgr, &g) && RaceReadFile(nclr, &c) &&
-                bank->Load(g, e, c, cells)) {
+                bank->Load(g, e, c, cells, palette)) {
                 banks[b] = bank;
                 printf("hud bank %d: %d cells, atlas %d x %d\n", b, (int)bank->cells.size(), bank->width,
                        bank->height);
@@ -572,14 +580,8 @@ const char *const *RaceGlyph(char c)
 
 void RaceHudLayout(int w, int h, float s, const dsRaceProgress &rp, RaceTextFn text, void *user)
 {
-    // The game's HUD (dsHud: countdown, speed, laps, splits, clock) is drawn as sprites; only its text messages
-    // (+0x3c, localised strings, not ported) keep a stand-in here.
-    char buf[64];
-    const dsRaceEvent *last = rp.events.empty() ? nullptr : &rp.events.back();
-    if (rp.finished) {
+    // The game's HUD (dsHud: countdown, speed, laps, splits, clock, messages) is drawn as sprites; only the
+    // finish display (0x02104670, not ported) keeps a stand-in here.
+    if (rp.finished)
         text(w / 2 - 6 * 6 * 8 / 2 * s, h * 0.42f, 6 * s, "ARRIVEE!", 0.3f, 1, 0.3f, user);
-    } else if (last && last->type == dsRaceEvent::MISSED && rp.clock - last->time < 0x2000) {
-        snprintf(buf, sizeof buf, "%d CP MANQUE%s", last->value, last->value > 1 ? "S" : "");
-        text(w / 2 - 6 * 5 * (int)strlen(buf) / 2 * s, h * 0.42f, 5 * s, buf, 1, 0.3f, 0.3f, user);
-    }
 }
