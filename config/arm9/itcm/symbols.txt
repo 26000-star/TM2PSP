@@ -92,7 +92,7 @@ func_01fff8cc kind:function(arm,size=0x304) addr:0x01fff8cc
 func_01fffbd0 kind:function(arm,size=0x4) addr:0x01fffbd0
 func_01fffbd4 kind:function(arm,size=0x174) addr:0x01fffbd4
 func_01fffd48 kind:function(arm,size=0x4) addr:0x01fffd48
-func_01fffd4c kind:function(arm,size=0x160) addr:0x01fffd4c
+dsDraw_Quad2D kind:function(arm,size=0x160) addr:0x01fffd4c
 data_01fffec0 kind:bss addr:0x01fffec0
 data_01fffec4 kind:bss addr:0x01fffec4
 data_01fffec8 kind:bss addr:0x01fffec8

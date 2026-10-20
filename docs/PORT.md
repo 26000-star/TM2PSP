@@ -731,9 +731,18 @@ constant; PPSSPP list build hard/0 2.0 -> 3.0 ms per frame (sky, relit car, lit 
   race view top right in the game's small variant (Font28, pitch 10/5, as the bottom screen's best/target times).
   On wide screens each part follows its screen edge (`dsHudSprite::anchor`). The record's split times come from the
   save file (`split <track> t1 t2 ...` lines in `save.txt`, written with the best time). Not ported: the text
-  messages (+0x3c, localised strings through main 0x0208547c at (128, 102)), the speed backing
-  (`Graphics/hud/backing.n`, flags +0x128), the solo bottom screen (four blue panels: clock, target, best, retries),
+  messages (+0x3c, localised strings through main 0x0208547c at (128, 102)), the solo bottom screen (four blue panels: clock, target, best, retries),
   network and ghost modes. The HUD banks are loaded once and kept (reload_test stays flat).
+- **Backing panels (run 3):** the HUD's backing object (`*(hud + 0x128)`, ctor ov003 0x02131068, draw 0x02130e1c)
+  draws translucent quads through itcm 0x01fffd4c (x / 128 - 1, (y - 96) x 43 / 4096 with y from the bottom
+  edge, texture coordinates per corner; POLYGON_ATTR 0x021f00c0, colour 0x3def) with the texture "speedobg" of
+  `Graphics/hud/backing.n` (64 x 32, black, alpha 49 / 255 with a softer edge): the speed's panel at (197, 6,
+  64 x 32) always; the lap counter's, mirrored, at (-21 below 10 laps else -6, 6, 79 x 32) while it is shown
+  (flag +0x15, x set by 0x02130e04); the split times' at (48, 132, 132 x 60), or (48, 154, 132 x 35) for one line
+  (+0x17), while they are shown (+0x16); a message panel (+0x14) goes with the unported messages. The model
+  `hud/backing` is also loaded, hidden, by the car visual (0x020fd914, +0x28) and placed with the shadow; it is
+  never shown in the race. Port: `dsHud::BackingQuads` (game code) and `RaceHudBacking`, which draws the texture
+  exactly as filled rectangles of equal alpha (merged rows), so both drivers reuse their rectangle callback.
 
 ### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
 

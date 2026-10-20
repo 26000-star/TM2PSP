@@ -433,6 +433,67 @@ void RaceHudSprites(int w, int h, const dsHud &hud, RaceSpriteFn sprite, void *u
     }
 }
 
+// Runs of equal alpha in the backing texture, rows with the same runs merged: {x0, x1, y0, y1, alpha} in texels.
+struct BackingRun {
+    u8 x0, x1, y0, y1, a;
+};
+static const std::vector<BackingRun> &BackingRuns()
+{
+    static std::vector<BackingRun> runs;
+    static bool loaded = false;
+    if (loaded)
+        return runs;
+    loaded = true;
+    G3Model *m = RaceLoadModel("hud/backing", false);
+    if (m && !m->textures.empty() && m->textures[0].w <= 256 && m->textures[0].h <= 256) {
+        const G3Texture &t = m->textures[0];
+        std::vector<BackingRun> prev;
+        for (int y = 0; y < t.h; y++) {
+            std::vector<BackingRun> row;
+            for (int x = 0; x < t.w;) {
+                u8 a = t.rgba[((size_t)y * t.w + x) * 4 + 3];
+                int e = x;
+                while (e + 1 < t.w && t.rgba[((size_t)y * t.w + e + 1) * 4 + 3] == a)
+                    e++;
+                if (a)
+                    row.push_back({(u8)x, (u8)e, (u8)y, (u8)y, a});
+                x = e + 1;
+            }
+            bool same = row.size() == prev.size();
+            for (size_t i = 0; same && i < row.size(); i++)
+                same = row[i].x0 == prev[i].x0 && row[i].x1 == prev[i].x1 && row[i].a == prev[i].a;
+            if (same && !row.empty()) {
+                for (size_t i = 0; i < row.size(); i++)
+                    runs[runs.size() - row.size() + i].y1 = (u8)y;
+            } else {
+                runs.insert(runs.end(), row.begin(), row.end());
+            }
+            prev = row;
+        }
+    }
+    delete m;
+    return runs;
+}
+
+void RaceHudBacking(int w, int h, const dsHud &hud, RaceRectFn rect, void *user)
+{
+    const std::vector<BackingRun> &runs = BackingRuns();
+    dsHudQuad q[4];
+    float k = h / 192.0f, ox = w / 2.0f - 128 * k;
+    for (int i = 0, n = hud.BackingQuads(q); i < n; i++) {
+        // Texel (s, t) -> DS pixel: x across s0..s1, y (from the bottom) across t0..t1.
+        float sx = (float)q[i].w / (q[i].s1 - q[i].s0), sy = (float)q[i].h / (q[i].t1 - q[i].t0);
+        for (const BackingRun &r : runs) {
+            float xa = q[i].x + (r.x0 - q[i].s0) * sx, xb = q[i].x + (r.x1 + 1 - q[i].s0) * sx;
+            float ya = q[i].y + (r.y0 - q[i].t0) * sy, yb = q[i].y + (r.y1 + 1 - q[i].t0) * sy;
+            float x0 = xa < xb ? xa : xb, x1 = xa < xb ? xb : xa;
+            float top = 192 - (ya > yb ? ya : yb), bottom = 192 - (ya > yb ? yb : ya);
+            rect(ox + q[i].anchor * ox + x0 * k, top * k, (x1 - x0) * k, (bottom - top) * k, 0, 0, 0, r.a / 255.0f,
+                 user);
+        }
+    }
+}
+
 // ---- Text stand-in: a 5 x 7 bitmap font (menus and the HUD messages) ----
 struct Glyph {
     char c;

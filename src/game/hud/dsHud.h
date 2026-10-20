@@ -12,8 +12,9 @@
 //  - +0x130 race clock (0x021057cc / 0x02105094 / 0x02105408): on the DS it is on the bottom screen in Font40;
 //    port deviation: the PSP has one screen, so it is drawn on the race view, top right, in the game's small
 //    clock variant (Font28, the layout of the bottom screen's best/target times).
-// Not ported: the text messages (+0x3c, localised strings), the speedometer backing (Graphics/hud/backing.n, a
-// textured quad behind the speed), the bottom screen (best/target times, retries), the network/ghost modes.
+//  - +0x128 backing: translucent panels under the speed, laps and split times (BackingQuads).
+// Not ported: the text messages (+0x3c, localised strings; the backing's message panel +0x14 goes with them), the
+// bottom screen (best/target times, retries), the network/ghost modes.
 #pragma once
 
 #include <vector>
@@ -32,6 +33,15 @@ struct dsHudSprite {
     s8 anchor = 0;     // port: screen edge the part follows on a screen wider than 4:3 (-1 left, 0 centre, 1 right)
 };
 
+// A quad of the HUD backing (*(hud + 0x128), ov003 0x02130e1c via itcm 0x01fffd4c): DS top-screen pixels with y
+// counted from the BOTTOM edge (x / 128 - 1, (y - 96) / 95.3 in the 3D overlay); texture coordinates in texels of
+// Graphics/hud/backing.n's texture "speedobg" (64 x 32, black with alpha), t1 at the top edge, t0 at the bottom.
+struct dsHudQuad {
+    s16 x, y, w, h;
+    s16 s0, t0, s1, t1;
+    s8 anchor; // port: as dsHudSprite::anchor
+};
+
 class dsHud {
 public:
     // Paths of the banks under the VFS (cells, characters, palette) and the number of cells the HUD uses (0: all),
@@ -45,6 +55,10 @@ public:
     // time, or none.
     void Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::vector<fx32> &recordSplits,
                 fx32 recordTime);
+
+    // The translucent panels drawn under the sprites (0x02130e1c): the speed's, the lap counter's while it is
+    // shown, the split times' while they are shown (two lines or one). At most 4; returns the count.
+    int BackingQuads(dsHudQuad *out) const;
 
     std::vector<dsHudSprite> sprites; // every sprite; draw the visible ones
     std::vector<fx32> splits;         // this run's checkpoint / lap times in passing order (for the record)

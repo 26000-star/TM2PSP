@@ -262,6 +262,7 @@ void RaceApp::Overlay(int w, int h, float s, RaceTextFn text, RaceRectFn rect, R
         return;
     }
     if (race) {
+        RaceHudBacking(w, h, race->hud, rect, user);
         RaceHudSprites(w, h, race->hud, sprite, user);
         RaceHudLayout(w, h, s, *race->progress, text, user);
     }

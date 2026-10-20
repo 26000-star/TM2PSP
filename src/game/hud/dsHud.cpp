@@ -361,3 +361,24 @@ void dsHud::Update(const dsRaceProgress &rp, fx32 speed, int ticks, const std::v
         m_splitOn = false;
     }
 }
+
+// The backing object (ctor 0x02131068) keeps +0x14 message panel, +0x15 laps (the counter's flag +0x28), +0x16
+// splits shown (+0x124), +0x17 one split line only, +0x18 the lap panel's x (0x02130e04: -21 below 10 laps, else
+// -6). Its draw sends four-vertex quads through 0x01fffd4c with POLYGON_ATTR 0x021f00c0 and colour 0x3def.
+// @port ov003:02130e1c partial (the message panel +0x14 is left out with the messages) / ov003:02130e04 done
+int dsHud::BackingQuads(dsHudQuad *q) const
+{
+    int n = 0;
+    q[n++] = {0xc5, 6, 0x40, 0x20, 0, 0, 64, 32, 1};
+    if (m_lapsOn)
+        q[n++] = {(s16)(m_lapTotal < 10 ? -0x15 : -6), 6, 0x4f, 0x20, 64, 0, 0, 32, -1};
+    // +0x17 is set in the solo mode only for mode 6 (0x021048a0); the port hides the difference line without a
+    // record (see ShowSplit), so one line then.
+    if (m_splitOn) {
+        if (m_line[1].shown)
+            q[n++] = {0x30, 0x84, 0x84, 0x3c, 0, 0, 64, 32, 0};
+        else
+            q[n++] = {0x30, 0x9a, 0x84, 0x23, 0, 0, 64, 32, 0};
+    }
+    return n;
+}

@@ -32,3 +32,9 @@ main:02069584 dsSprite_Create
 main:020696b0 dsSprite_CreateInBank
 main:0208547c dsText_Draw
 main:0209558c dsRecord_SplitTime
+# backing panels +0x128
+ov003:02131068 dsHudBacking_ctor
+ov003:02130e1c dsHudBacking_Draw
+ov003:02130e04 dsHudBacking_SetLapsWide
+ov003:02101e28 dsHudBacking_SetMessage
+itcm:01fffd4c dsDraw_Quad2D

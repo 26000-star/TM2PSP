@@ -104,6 +104,11 @@ G2CellBank *const *RaceHudBanks();
 typedef void (*RaceSpriteFn)(const G2CellBank &bank, const G2Cell &cell, float x, float y, float w, float h,
                              void *user);
 void RaceHudSprites(int w, int h, const dsHud &hud, RaceSpriteFn sprite, void *user);
+// The HUD's translucent backing panels (dsHud::BackingQuads), drawn before the sprites, with the same screen
+// mapping. Their texture (Graphics/hud/backing.n "speedobg": black, alpha only) is read once and drawn exactly as
+// rectangles of equal alpha, so the drivers need only their filled-rectangle callback.
+typedef void (*RaceRectFn)(float x, float y, float w, float h, float r, float g, float b, float a, void *user);
+void RaceHudBacking(int w, int h, const dsHud &hud, RaceRectFn rect, void *user);
 
 // HUD text stand-in: the race messages (checkpoints missed, finish) in the middle of a w x h screen; `scale`
 // multiplies the pixel sizes (1 at 768 x 576). Text is drawn by the callback.

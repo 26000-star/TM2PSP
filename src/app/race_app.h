@@ -16,7 +16,6 @@ struct RaceTrackEntry {
 };
 const RaceTrackEntry *RaceTracks(int *count); // the 26 Coast tracks, menu order
 
-typedef void (*RaceRectFn)(float x, float y, float w, float h, float r, float g, float b, float a, void *user);
 
 class RaceApp {
 public:
