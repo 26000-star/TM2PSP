@@ -3,8 +3,9 @@
 Every file of the given commits (HEAD by default, all commits not yet on a remote with --unpushed, or the
 revisions given) is checked against what must stay local:
 - paths: ROMs, extracted or converted game data (extract/, assets/, build/, *.sdat, vfs.*, *.fet, *.nds...),
-- binary files: only the ones listed in ALLOWED_BINARIES may be committed (none today: pictures of the game,
-  screenshots included, stay out; the front end's pictures come from the user's ROM at build time),
+- binary files: only the ones matching ALLOWED_BINARIES may be committed: the README's animations of the port
+  (docs/media/*.gif, tools/host/make_gifs.py, menus drawn with the ROM's pictures); other pictures stay out, and
+  the front end's pictures come from the user's ROM at build time,
 - content: a DS ROM header, or a file starting with a Nitro signature (BMD0, SDAT, NCGR...) or a zip header.
 
 Usage: python -P tools/check_public.py [--unpushed | <rev> ...]
@@ -16,7 +17,7 @@ import sys
 FORBIDDEN = ["*.nds", "*.srl", "*.sdat", "*.mob", "*.zip", "*.fet", "*.pbp", "*.PBP", "*.luac", "*.dcsc", "vfs.*",
              "*/vfs.*", "extract/*", "assets/*", "build/*", "ghidra/*", "*.bmd", "*.nsbmd", "*.ncgr", "*.nclr",
              "*.nscr", "*.ncer", "*.nanr", "*.sseq", "*.sbnk", "*.swar", "*.strm"]
-ALLOWED_BINARIES = set()
+ALLOWED_BINARIES = ["docs/media/*.gif"]
 # Nitro file magics, as stored (most are byte-reversed tags) and a zip local header.
 MAGICS = [b"BMD0", b"BTX0", b"SDAT", b"RGCN", b"RLCN", b"RCSN", b"RECN", b"RNAN", b"SSEQ", b"SBNK", b"SWAR",
           b"PK\x03\x04"]
@@ -43,7 +44,7 @@ def problems(path, data):
         if fnmatch.fnmatch(low, pat.lower()):
             yield "game data path (%s)" % pat
             break
-    if b"\0" in data[:8000] and path not in ALLOWED_BINARIES:
+    if b"\0" in data[:8000] and not any(fnmatch.fnmatch(path, pat) for pat in ALLOWED_BINARIES):
         yield "binary file"
     for m in MAGICS:
         if data.startswith(m):

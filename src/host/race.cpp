@@ -1,6 +1,8 @@
 // tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
 //   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result] [--keys UDLROBP]
 //           [--wav out.wav] [--mute] [--no-music] [--horn-at F] [--respawn-at F]...
+//           [--shot-from F [--shot-every K]]: --shot is then a printf pattern (frame_%04d.bmp) saved every K frames
+//           from frame F (README animations: tools/host/make_gifs.py)
 // Without --track, the track menu comes first (RaceApp, src/app/race_app.h; best times in tm_race_save.txt next to
 // the program, or --save). Menus: arrows, Enter = choose, Esc = back / quit.
 // Race keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
@@ -486,7 +488,7 @@ int main(int argc, char **argv)
         freeWheelAt = -1;
     bool autoDrive = false, mute = false;
     const char *wav = nullptr;
-    int hornAt = -1;
+    int hornAt = -1, shotFrom = -1, shotEvery = 1;
     std::vector<int> respawnAt;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
@@ -497,6 +499,10 @@ int main(int argc, char **argv)
             frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc)
             shot = argv[++i];
+        else if (!strcmp(argv[i], "--shot-from") && i + 1 < argc)
+            shotFrom = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--shot-every") && i + 1 < argc)
+            shotEvery = atoi(argv[++i]) > 0 ? atoi(argv[i]) : 1;
         else if (!strcmp(argv[i], "--no-cull")) // draw every piece (culling check)
             noCull = true;
         else if (!strcmp(argv[i], "--unlit")) // material colours, no DS lighting, fog or sky (as before phase 5)
@@ -731,10 +737,15 @@ int main(int argc, char **argv)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         }
         DrawHud(W, H, app);
-        if (frames >= 0 && frame == frames - 1 && shot && !app.race) {
+        if (frames >= 0 && shot && shotFrom >= 0 && frame >= shotFrom && (frame - shotFrom) % shotEvery == 0) {
+            char path[512];
+            snprintf(path, sizeof path, shot, frame);
+            glFinish();
+            SaveBmp(path, W, H);
+        } else if (frames >= 0 && frame == frames - 1 && shot && shotFrom < 0 && !app.race) {
             glFinish();
             SaveBmp(shot, W, H);
-        } else if (frames >= 0 && frame == frames - 1 && shot) {
+        } else if (frames >= 0 && frame == frames - 1 && shot && shotFrom < 0) {
             RaceSession &race = *app.race;
             glFinish();
             SaveBmp(shot, W, H);

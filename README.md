@@ -2,6 +2,15 @@
 
 Native PSP port of **TrackMania Turbo (DS, Europe, `BT2P`)** through decompilation. See [STUDY.md](STUDY.md) for the feasibility study and the toolchain.
 
+| Race (Stadium) | The four environments |
+|---|---|
+| ![race](docs/media/race.gif) | ![environments](docs/media/environments.gif) |
+| **Menus** | **Track editor (free draw)** |
+| ![menus](docs/media/menus.gif) | ![editor](docs/media/editor.gif) |
+
+Recorded from the host build (`tools/host/make_gifs.py`), which runs the same code and draws the same frames as
+the PSP build.
+
 **No game data lives in this repository**: no ROM, no models, sounds, textures, scripts or pictures of the game.
 The builder takes them from your own dump of the cartridge and produces the PSP game folder.
 

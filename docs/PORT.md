@@ -1598,3 +1598,8 @@ de la flèche) et PPSSPP (boucle sur Coast avec le terrain automatique, flèche)
   `TM_ROM_FILES`), compile `tm_race` en Release (psp-cmake natif, sinon une distribution WSL qui l'a, sinon Docker ;
   ou `--eboot`) et écrit `PSP/GAME/TM2PSP`. `tools/psp/package.ps1` passe par lui. Vérifié : depuis la ROM, via WSL,
   le paquet (EBOOT compris) est identique octet pour octet à celui de `psp_build.sh` + l'ancien `package.ps1`.
+- **Animations du README** (`tools/host/make_gifs.py`, `docs/media/*.gif`, seuls binaires admis par
+  `check_public.py`) : courses scriptées de `tm_race` hôte (`--auto`), avec la nouvelle capture en série
+  `--shot <motif %d> --shot-from F [--shot-every K]` ; menus par `--screen menu --keys`, recadrés sur la bande 16:9,
+  avec les images de la ROM (`TM_FE_ROM_PICTURES=1`) ; éditeur : START > Dessin libre puis X maintenu
+  (`--pad`). 10 images/s, 400 x 300, sans tramage (sinon la compression GIF s'effondre).
