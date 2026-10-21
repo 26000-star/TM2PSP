@@ -1577,3 +1577,24 @@ l'hôte (`late 0`) ; marqueurs visibles dans l'éditeur (hôte : Stadium, Island
 - Script de touches de l'éditeur : `[` appuie sur X et le garde jusqu'à `]` (tracés dans les captures).
 Vérifié : `tm_trackdump --editor` 0 erreur ; captures hôte (boucle Stadium, flèche puis essai : voiture dans le sens
 de la flèche) et PPSSPP (boucle sur Coast avec le terrain automatique, flèche) ; aide de l'éditeur mise à jour.
+
+## Dépôt public et builder (2026-10-21)
+
+- **Une seule version du code** : le dépôt public est ce dépôt-ci. Rien du jeu n'est suivi par git : ROM,
+  `extract/`, données converties, `assets/` (dont les images de menu personnelles `assets/fe/*.png`) et les
+  captures `docs/*.png` sont ignorés. `tools/check_public.py` vérifie chaque commit poussé (chemins, fichiers
+  binaires, en-tête de ROM DS, signatures Nitro et zip en tête de fichier) depuis le hook `.githooks/pre-push`
+  (`git config core.hooksPath .githooks`) et dans la CI (`.github/workflows/build.yml`, qui compile aussi l'EBOOT
+  dans l'image `pspdev/pspdev`).
+- **Images du menu** (`tools/fe/fe_pictures.py`) : celles de `assets/fe` si elles existent, sinon celles de la ROM :
+  fond = haut de `MainMenuTopBG` (au-dessus du bandeau, éclairci à 50 % vers le blanc), cartes = haut de
+  `SinglePlayerTopBG`, `EditorTopBG`, `MultiplayerTopBG`, icônes = sprites du front end (`Coppers` 2 : pièce d'or,
+  `PlayerIcon` 0 : casque, `Wireless` 0 : console DS), agrandis ×4 au plus proche avant la réduction lissée.
+  `TM_FE_ROM_PICTURES=1` ignore `assets/fe` (aperçu de la version publique :
+  `tools/fe/mockup_main.py`). Avec `assets/fe`, les 40 `.fet` sont identiques octet pour octet à ceux d'avant.
+- **Builder** (`builder.py`) : lit la ROM (`tools/nitrofs.py`, FNT + FAT ; les 13 fichiers sont identiques à
+  `dsd rom extract`), vérifie le code jeu `BT2P` et le SHA-1 des 4 fichiers lus par l'EBOOT (`vfs.zip`, `vfs.bin`,
+  `vfs.dat`, `audio/sound_data.sdat` ; une ROM rognée passe donc), convertit les images (`convert.py`, avec
+  `TM_ROM_FILES`), compile `tm_race` en Release (psp-cmake natif, sinon une distribution WSL qui l'a, sinon Docker ;
+  ou `--eboot`) et écrit `PSP/GAME/TM2PSP`. `tools/psp/package.ps1` passe par lui. Vérifié : depuis la ROM, via WSL,
+  le paquet (EBOOT compris) est identique octet pour octet à celui de `psp_build.sh` + l'ancien `package.ps1`.

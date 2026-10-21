@@ -1,6 +1,7 @@
 """Converts the front end's pictures to the small texture files read by src/app/fe_canvas.cpp (FeImage).
 
-Sources: the user's pictures in assets/fe (background, card pictures, button icons) and the DS top-screen artworks
+Sources: the user's pictures in assets/fe, or the ROM's (fe_pictures.py: background, card pictures, button
+icons), and the DS top-screen artworks
 Graphics/2dMaps/common/FrontEnd/Screen/<name>TopBG (their upper part, above the DS title band), resized here once to
 the size the menus draw them at (480 x 272, 1:1 on the PSP), so that the PSP keeps them in RAM with no scaling work.
 
@@ -20,6 +21,7 @@ from PIL import Image, ImageFilter
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
 sys.path.insert(0, HERE)
+import fe_pictures  # noqa: E402
 import mockup_main  # noqa: E402  (the DS screen reader of the validated mock-up)
 
 W, H = 480, 272
@@ -74,16 +76,15 @@ def write(path, im, fmt):
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build", "fe", "data")
     os.makedirs(out, exist_ok=True)
-    fe = os.path.join(ROOT, "assets", "fe")
     total = 0
     # Background: covers 480 x 272, softened as the Wii menu's photo (mockup_main).
-    bg = cover(Image.open(os.path.join(fe, "background.png")).convert("RGBA"), W, H).filter(ImageFilter.GaussianBlur(1.2))
+    bg = cover(fe_pictures.picture("background"), W, H).filter(ImageFilter.GaussianBlur(1.2))
     total += write(os.path.join(out, "background.fet"), bg, 0)
     for name in ("solo", "track", "multi"):
-        total += write(os.path.join(out, name + ".fet"), cover(Image.open(os.path.join(fe, name + ".png")), *CARD), 0)
+        total += write(os.path.join(out, name + ".fet"), cover(fe_pictures.picture(name), *CARD), 0)
     # Button icons: 32 pixels high (drawn 20 high on the PSP, 32 on the host's larger window), with their alpha.
     for name in ("shop", "profile", "options"):
-        im = Image.open(os.path.join(fe, name + ".png")).convert("RGBA")
+        im = fe_pictures.picture(name)
         im = im.resize((max(1, im.size[0] * 32 // im.size[1]), 32), Image.LANCZOS)
         total += write(os.path.join(out, name + ".fet"), im, 3)
     for name in DS_SCREENS:

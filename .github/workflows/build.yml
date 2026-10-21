@@ -1,0 +1,25 @@
+# Compiles the PSP EBOOT from the sources (no game data needed) and checks that no game file was committed.
+# The EBOOT alone does not run the game: builder.py adds the files from your own ROM (builder.py --eboot <it>).
+name: build
+on: [push, pull_request]
+jobs:
+  public-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -P tools/check_public.py HEAD
+  eboot:
+    runs-on: ubuntu-latest
+    container: pspdev/pspdev:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tools
+        run: command -v cmake && command -v make || apk add --no-cache cmake make
+      - name: Configure
+        run: psp-cmake -S . -B build/psp -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/psp --target tm_race -j"$(nproc)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EBOOT
+          path: build/psp/tm_race_pbp/EBOOT.PBP

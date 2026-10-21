@@ -1,0 +1,18 @@
+#!/bin/sh
+# Refuses a push that would publish game data (tools/check_public.py checks every commit being pushed).
+# Enabled once per clone with: git config core.hooksPath .githooks
+zero=0000000000000000000000000000000000000000
+while read local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue  # a deleted branch publishes nothing
+    if [ "$remote_sha" = "$zero" ]; then
+        revs=$(git rev-list "$local_sha" --not --remotes)
+    else
+        revs=$(git rev-list "$remote_sha..$local_sha")
+    fi
+    [ -z "$revs" ] && continue
+    python -P tools/check_public.py $revs || {
+        echo "pre-push: $local_ref holds files that must not be published (see above)" >&2
+        exit 1
+    }
+done
+exit 0

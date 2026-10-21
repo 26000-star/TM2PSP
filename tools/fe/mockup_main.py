@@ -1,6 +1,7 @@
 """Mock-up of the PSP front end's main menu in the TrackMania Wii style (16:9, 480 x 272), drawn from the game's own
 assets: the DS fonts (Fonts/Cell/Font*_White), the DS top-screen artworks for the cards, the DS icons. The background
-is a file given on the command line (the user's TrackMania United picture); without it a DS artwork stands in.
+and the background, card and button pictures are the user's (assets/fe) or the ROM's (fe_pictures.py); --bg replaces
+the background. The game files are read from extract/files, or from the directory in TM_ROM_FILES.
 
 Usage: python -P tools/fe/mockup_main.py <out.png> [--bg background.png] [--select 0..5] [--scale 3]
 """
@@ -13,12 +14,18 @@ from PIL import Image, ImageDraw, ImageFilter
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 sys.path.insert(0, os.path.join(ROOT, "tools", "assets"))
 import nitro2d  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools", "fe"))
 
-VFS = zipfile.ZipFile(os.path.join(ROOT, "extract", "files", "vfs.zip"))
-NAMES = {n.lower(): n for n in VFS.namelist()}
+FILES = os.environ.get("TM_ROM_FILES", os.path.join(ROOT, "extract", "files"))
+VFS = None
+NAMES = {}
 
 
 def read(path):
+    global VFS
+    if VFS is None:
+        VFS = zipfile.ZipFile(os.path.join(FILES, "vfs.zip"))
+        NAMES.update({n.lower(): n for n in VFS.namelist()})
     return VFS.read(NAMES[path.lower()])
 
 
@@ -90,7 +97,7 @@ def card(dst, box, art, label, font, selected):
     rounded(dst, box, 8, (250, 250, 250, 255), (60, 140, 230, 255) if selected else (200, 200, 205, 255),
             3 if selected else 1)
     ih = int((y1 - y0) * 0.72)
-    # Cover the picture area (the user's card pictures, assets/fe).
+    # Cover the picture area (the card pictures, fe_pictures.picture).
     tw, th = x1 - x0 - 8, ih - 4
     s = max(tw / art.size[0], th / art.size[1])
     a = art.resize((max(tw, int(art.size[0] * s + 0.5)), max(th, int(art.size[1] * s + 0.5))), Image.LANCZOS)
@@ -113,6 +120,7 @@ def button(dst, box, icon, label, font, selected):
 
 
 def main():
+    import fe_pictures  # (it imports this module: loaded here, not at the top)
     args = sys.argv[1:]
     out = args[0]
     opt = lambda k, d: args[args.index(k) + 1] if k in args else d
@@ -123,7 +131,7 @@ def main():
     if bgpath:
         bg = Image.open(bgpath).convert("RGBA")
     else:
-        bg = screen("MainMenuTopBG")
+        bg = fe_pictures.picture("background")
     # Cover 480 x 272, softened as the Wii menu's photo.
     s = max(W / bg.size[0], H / bg.size[1])
     bg = bg.resize((int(bg.size[0] * s + 0.5), int(bg.size[1] * s + 0.5)), Image.LANCZOS)
@@ -133,14 +141,13 @@ def main():
     # Title tab.
     rounded(img, (-20, 18, 138, 52), 17, (252, 252, 252, 255), (60, 140, 230, 255), 2)
     f28.draw(img, "Main Menu", 14, (18 + 52 - f28.cap) // 2, (40, 40, 45))
-    fe = os.path.join(ROOT, "assets", "fe")
     cards = [("solo", "Single Player"), ("track", "Track Editor"), ("multi", "Multiplayer")]
     xs = [32, 183, 325]
     for i, (art, label) in enumerate(cards):
         x = xs[i]
         box = (x - 6, 62, x + 128 + 6, 204) if i == sel else (x, 72, x + 116, 194)
-        card(img, box, Image.open(os.path.join(fe, art + ".png")).convert("RGBA"), label, f20, i == sel)
-    icons = {n: Image.open(os.path.join(fe, n + ".png")).convert("RGBA") for n in ("shop", "profile", "options")}
+        card(img, box, fe_pictures.picture(art), label, f20, i == sel)
+    icons = {n: fe_pictures.picture(n) for n in ("shop", "profile", "options")}
     buttons = [("shop", "Shop"), ("profile", "Profile"), ("options", "Options")]
     for i, (ic, label) in enumerate(buttons):
         x = xs[i] + 4

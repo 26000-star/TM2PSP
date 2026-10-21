@@ -2,13 +2,40 @@
 
 Native PSP port of **TrackMania Turbo (DS, Europe, `BT2P`)** through decompilation. See [STUDY.md](STUDY.md) for the feasibility study and the toolchain.
 
-No game data lives in this repository. You need your own dump of the ROM.
+**No game data lives in this repository**: no ROM, no models, sounds, textures, scripts or pictures of the game.
+The builder takes them from your own dump of the cartridge and produces the PSP game folder.
+
+## Building the game from your ROM
+
+You need your own dump of TrackMania Turbo DS, Europe (`BT2P`; the supported dump has SHA-1
+`857b8f5f5ce9b91eaa04e35b99a591243672e51c`, a trimmed dump of it works too), Python 3.11 or later with Pillow
+(`pip install pillow`) and a PSP toolchain: [pspdev](https://pspdev.github.io) with `psp-cmake` on the PATH (Linux,
+macOS, or a WSL distribution on Windows, found automatically), or Docker (the `pspdev/pspdev` image).
+
+```bash
+python -P builder.py --rom "TrackMania Turbo (Europe) (En,Fr,De,Es,It).nds"
+```
+
+The builder reads the game's files from the ROM and checks them against the supported dump, converts the menu
+pictures, compiles the EBOOT (Release) and lays out `build/psp/package/PSP/GAME/TM2PSP` (EBOOT.PBP, `files/`, `fe/`).
+Copy the `PSP` folder to the root of the memory stick of a PSP with custom firmware (target: PSP-3000, 6.61 LME).
+Without a toolchain, take the EBOOT built by this repository's CI (the `EBOOT` artifact of the `build` workflow)
+and pass it with `--eboot EBOOT.PBP`. `python -P builder.py --help` lists the other options.
+
+The menu pictures (background, the three cards of the main menu, the shop/profile/options icons) come from the
+ROM's own DS menus. To use other ones, put PNG files named `background`, `solo`, `track`, `multi`, `shop`,
+`profile` and `options` in `assets/fe/` (ignored by git) before running the builder.
+
+Contributing: `git config core.hooksPath .githooks` enables the pre-push hook, which runs
+`tools/check_public.py` and refuses a push that would publish a game file (ROM data, converted data, pictures).
 
 ## Layout
 
 | Path | Content | In git |
 |---|---|---|
+| `builder.py` | ROM → PSP game folder (`tools/nitrofs.py` reads the ROM's files) | yes |
 | `baserom.nds` | Your ROM (hardlink or copy). SHA-1 `857b8f5f5ce9b91eaa04e35b99a591243672e51c` | no |
+| `assets/fe/` | Optional menu pictures replacing the ROM's (`tools/fe/fe_pictures.py`) | no |
 | `extract/` | `dsd rom extract` output: ARM9/ARM7 binaries, ITCM/DTCM, overlays, files | no |
 | `config/` | `dsd init` output: per-module `symbols.txt`, `relocs.txt`, `delinks.txt` | yes |
 | `tools/ghidra/` | Headless Ghidra scripts (dsd import, stats) | yes |
@@ -155,7 +182,6 @@ In short:
   (`tm_trackdump --triggers` + `check_triggers.py`, `tm_physics --progress` + `check_progress.py`), seen from the
   game's chase camera (`config/cameras`, `check_cameras.py` + `check_camera.py`), with a host HUD stand-in: **a Coast race is playable on the host**
   (the game's own HUD, lighting, sky and menus are still to port).
-  ![tm_race on coa/easy/0](docs/host_race.png)
 
 ```bash
 cmake -S . -B build/host -G Ninja
@@ -199,7 +225,6 @@ python -P tools/analysis/port_status.py --race-only
 - **The Coast race runs on the PSP** (`build/psp/tm_race/EBOOT.PBP`, sceGu 480 x 272, sceCtrl: X accelerate,
   square brake, d-pad/analog steer, triangle checkpoint, start pause menu, select camera). In PPSSPP, after 150 frames
   the car and camera are identical to the host's (`tools/psp/race_shot.ps1`).
-  ![tm_race on the PSP (PPSSPP), coa/easy/0](docs/psp_race.png)
 
 ```bash
 bash tools/psp_build.sh
@@ -217,8 +242,9 @@ powershell -ExecutionPolicy Bypass -File tools/psp/race_shot.ps1
 powershell -ExecutionPolicy Bypass -File tools/psp/package.ps1
 ```
 
-The last one fills `build/psp/package/PSP/GAME/TM2PSP` (EBOOT + the game files from your ROM): copy its `PSP`
-folder to the root of a memory stick (custom firmware needed). Real-hardware speed is not verified yet.
+The last one fills `build/psp/package/PSP/GAME/TM2PSP` (EBOOT + the game files from your ROM) through `builder.py`
+from `extract/files` and the EBOOT of `tools/psp_build.sh`: copy its `PSP` folder to the root of a memory stick
+(custom firmware needed). Real-hardware speed is not verified yet.
 
 ## Phase 5: polish on the real PSP and fidelity (in progress)
 

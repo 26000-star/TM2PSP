@@ -4,8 +4,13 @@
 *.sdat
 *.mob
 *.zip
+*.fet
+*.pbp
+*.PBP
 /extract/
+# Pictures of the game (screenshots of the port included) and the user's own menu pictures (assets/fe)
 /assets/
+/docs/*.png
 
 # --- Generated / local ---
 /build/
