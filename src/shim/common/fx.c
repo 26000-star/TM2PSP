@@ -163,6 +163,68 @@ u16 FX_AcosIdx(fx32 x)
     return (u16)((mid * 2 + 1) << 3);
 }
 
+/* FX_AtanIdxTable_ (main 0x020b828c): atan(i / 128) as an angle index, i = 0..128. */
+static const s16 FX_AtanIdxTable_[129] = {
+    0, 81, 163, 244, 326, 407, 489, 570, 651, 732, 813, 894, 975, 1056, 1136, 1217,
+    1297, 1377, 1457, 1537, 1617, 1696, 1775, 1854, 1933, 2012, 2090, 2168, 2246, 2324, 2401, 2478,
+    2555, 2632, 2708, 2784, 2860, 2935, 3010, 3085, 3159, 3233, 3307, 3380, 3453, 3526, 3599, 3670,
+    3742, 3813, 3884, 3955, 4025, 4095, 4164, 4233, 4302, 4370, 4438, 4505, 4572, 4639, 4705, 4771,
+    4836, 4901, 4966, 5030, 5094, 5157, 5220, 5282, 5344, 5406, 5467, 5528, 5589, 5649, 5708, 5768,
+    5826, 5885, 5943, 6000, 6058, 6114, 6171, 6227, 6282, 6337, 6392, 6446, 6500, 6554, 6607, 6660,
+    6712, 6764, 6815, 6867, 6917, 6968, 7018, 7068, 7117, 7166, 7214, 7262, 7310, 7358, 7405, 7451,
+    7498, 7544, 7589, 7635, 7679, 7724, 7768, 7812, 7856, 7899, 7942, 7984, 8026, 8068, 8110, 8151,
+    8192};
+
+/* FX_Atan2Idx 0x0202c8f0: the angle of (x, y) as a 16-bit index. The octant gives a base angle; the smaller
+ * coordinate over the larger (hardware divider) indexes the table, added or subtracted (s16 arithmetic). */
+u16 FX_Atan2Idx(fx32 y, fx32 x)
+{
+    s32 a, b;
+    s16 base;
+    int add;
+    if (y > 0) {
+        if (x > 0) {
+            if (y < x) {
+                base = 0, add = 1, a = y, b = x;
+            } else if (y == x) {
+                return 0x2000;
+            } else {
+                base = 0x4000, add = 0, a = x, b = y;
+            }
+        } else if (x == 0) {
+            return 0x4000;
+        } else if (-x < y) {
+            base = 0x4000, add = 1, a = -x, b = y;
+        } else if (-x == y) {
+            return 0x6000;
+        } else {
+            base = (s16)-0x8000, add = 0, a = y, b = -x;
+        }
+    } else if (y == 0) {
+        return x < 0 ? 0x8000 : 0;
+    } else if (x < 0) {
+        if (-x < -y) {
+            base = -0x4000, add = 0, a = -x, b = -y;
+        } else if (x == y) {
+            return (u16)-0x6000;
+        } else {
+            base = (s16)-0x8000, add = 1, a = -y, b = -x;
+        }
+    } else if (x == 0) {
+        return (u16)-0x4000;
+    } else if (x < -y) {
+        base = -0x4000, add = 1, a = x, b = -y;
+    } else if (x == -y) {
+        return (u16)-0x2000;
+    } else {
+        base = 0, add = 0, a = -y, b = x;
+    }
+    {
+        s16 t = FX_AtanIdxTable_[FX_Div(a, b) >> 5];
+        return (u16)(s16)(add ? base + t : base - t);
+    }
+}
+
 /* MTX_RotX43_ 0x0202b258: rotation about x by (sin, cos), no translation. */
 void MTX_RotX43_(MtxFx43 *mtx, fx32 sinVal, fx32 cosVal)
 {

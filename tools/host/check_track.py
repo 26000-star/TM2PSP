@@ -242,7 +242,7 @@ def check_mesh(model, got):
 shared = [0]
 
 
-def check_footprints(placed, cat, meshes_dir):
+def check_footprints(placed, cat, meshes_dir, cw):
     occupied = {}
     for pid, name, kv in placed:
         p = cat[pid]
@@ -273,9 +273,11 @@ def check_footprints(placed, cat, meshes_dir):
             z = (v[0] * m[0][2] + v[1] * m[1][2] + v[2] * m[2][2]) / 4096.0 + m[3][2]
             xs.append(x / 4096.0)
             zs.append(z / 4096.0)
-        lo_x, hi_x = (cx - fw + 1) * 16 - 8, cx * 16 + 8
-        lo_z, hi_z = cz * 16 - 8, (cz + fd - 1) * 16 + 8
+        lo_x, hi_x = (cx - fw + 1) * cw - cw // 2, cx * cw + cw // 2
+        lo_z, hi_z = cz * cw - cw // 2, (cz + fd - 1) * cw + cw // 2
         tol = 1.5  # curbs of curves and transitions overhang their cells by up to 1.44
+        if name == "zeppelin":
+            tol = 2.5  # Stadium's blimp: its fins overhang its cells by up to 2.43 across
         if min(xs) < lo_x - tol or max(xs) > hi_x + tol or min(zs) < lo_z - tol or max(zs) > hi_z + tol:
             err("placed %s rot %d cell %s: mesh x %.2f..%.2f z %.2f..%.2f outside footprint x %d..%d z %d..%d" %
                 (name, rot, kv["cell"], min(xs), max(xs), min(zs), max(zs), lo_x, hi_x, lo_z, hi_z))
@@ -367,7 +369,7 @@ def main():
             for f in files:
                 if os.path.join(root, f).lower().endswith((model.split("/", 1)[1] + ".h").lower().replace("/", os.sep)):
                     mesh_verts[model] = parse_h(os.path.join(root, f))[1]
-    cells = check_footprints(placed, cat, mesh_verts)
+    cells = check_footprints(placed, cat, mesh_verts, cw)
 
     # ---- lighting
     tracks = eval_lua_data("%s/Scripts/config/tracks.lua" % LUA)["tracks"]

@@ -879,6 +879,282 @@ to the host; 114 checks, 0 errors; reload test (32 loads) constant (heap 891,144
 3rd on, textures and meshes 0); `check_culling.py` 0 differences (26 tracks x 3). PPSSPP, easy/0: 1,644 sea vertices (26 KB of list; hard/0 1,710), GE list build
 5.3 -> 6.1 ms per frame (the earlier rings: 3,136 untextured vertices); heap unchanged.
 
+### Step 6: sound (done; console test pending)
+
+The game does not use the NNS sound player directly: its own layers sit on top of it. Names in
+`config/names/phase5_audio.txt`.
+
+- **6a, the DS sound driver on the CPU** (`src/shim/common/snd_sdat.*`, `snd_driver.*`, library code). The SDAT
+  reader takes `audio/sound_data.sdat` (5 music sequences, 24 sequence archives of sound effects, 29 banks and wave
+  archives, 1.7 MB, kept in memory: there is no sound heap). The driver is the NitroSDK ARM7 sequencer (SSEQ players
+  and tracks, the 16 extended channels with envelopes, sweeps, LFOs and the allocation order) and the 16 hardware
+  channels (PCM8 / PCM16 / IMA-ADPCM, no interpolation, as the DS mixer) mixed to 32 kHz stereo, with the driver
+  frame every 64 x 2728 ARM7 cycles between the samples; above it the NNS player layer the game calls (players with
+  their sequence count and channel mask, faders, archive volumes). Its tables come from `arm7.bin`. Integer only:
+  the output depends only on the calls and the number of samples rendered. `tm_sdat --list` lists the archive,
+  `tm_sdat --seq|--arc ... --wav` renders a sequence (host, release build: 2 ms of CPU per second of the Coast music).
+- **6b, the game's sound layers** (`src/game/sound`): `dsSoundManager` (*0x020c8e88: handles type << 28 | slot << 20
+  | serial, sounds by name, sound-effect and music volumes, heap levels of the loaded archives), `dsSound3D`
+  (*0x020c8e8c: 64 sources heard from the camera, volume by distance between a minimum and a maximum, pan and pan-law
+  attenuation from the DTCM tables, at most 8 playing, sorted by heard volume; the angle now comes from
+  `FX_Atan2Idx`, ported with the ROM's table, instead of a float atan2) and `dsCarAudio` (ov003 *0x02137740: the
+  engine as three looping layers CAR_IDLE / CAR_LOW / CAR_MED whose volume and pitch follow a "sound RPM", skids,
+  collisions, horn; envelopes from `config/caraudio`).
+- **6c, the game's audio state** (`dsGameAudio`, main 0x0208bcfc..0x0208c9d4): the race start (0x0208c04c, from the
+  race loader) loads SEQARC_MENU_BASIC, SEQARC_DRIVING, the environment's archive (CHECKPOINT, LAP, SPEEDBOOST), a
+  horn (SEQARC_HORN_<n>, the player's number modulo 8) and SEQARC_CAR_<car>, starts the environment's music
+  (SEQARC_CoastMusic; the editor's test drive plays the environment's AMBIENT instead) and the car audio; the end of
+  a race (0x0208bf50) only drops the car audio, so the next race keeps the music; the front end (0x0208c4b8) stops
+  everything and loads the menu archives, its music switcher (0x0208bd74: 1 front end, 2 Coast, 3 Snow, 4 Island, 5
+  Stadium) changes the music. Two faders (sound effects, music: 0x0208c5ec in, 0x0208c588 out, 0x0208c674 both with
+  the music stopped at the end) run in the update (0x0208c730), which then updates the car audio from the camera.
+- **What plays in the race** (found in ov003): the countdown (0x02114ee4: COUNTDOWN_1 when the clock is above 2 s,
+  above 1 s and above 0, COUNTDOWN_2 at 0, the race mode's +0x18 = -1 after a restart), CHECKPOINT at each
+  checkpoint (0x0210e9fc, also at each lap since a lap passes the start piece's checkpoint) and at the finish
+  (0x0210ecf0), the car audio reset at every restart and respawn (0x020f7e6c), skids and collisions in the player's
+  update (0x0210ed9c), the horn on a button (dsRace_Update), the car's fade-out / fade-in over 30 frames when the
+  pause opens / closes (0x0210dd64 / 0x0210dbec). LAP and SPEEDBOOST are loaded but never played by ov003. The UI
+  plays MENU_SELECT / MENU_BACK / MENU_MOVE (main 0x0208c8ec hands them to *0x020d35cc +0x40..+0x48).
+- **The sound RPM** (0x020f799c) is the car speed smoothed by 41 / 4096 per frame, placed in a gear by the car's
+  TopSpeed thresholds, mapped to 7000..9000 across the gear, followed at 0.5 (0.2 when falling in gear 2 and up) and
+  lowered by 800 every frame, so it settles 1,600 (4,000) below its target: 6,200 at a standstill, about 5,400 to
+  7,400 in a gear. With the Coast car's envelopes (CAR_MED full from about 4,000 to 6,591 RPM, silent above 7,031)
+  the engine is mostly the CAR_MED layer, fading at the top of each gear. Checked against the decompilation twice
+  (the speed is the car's +0x384, the envelopes' unit is MaxRPM / 2048); it still deserves a listen against a DS.
+
+Port: `RaceSession::Load` starts the race sounds (Coast, horn 0, output mode 1, car "coa"), `RaceSession::Frame`
+plays the countdown and checkpoint sounds from the race events, resets the car audio and runs the player's sound
+update, `RaceSession::AudioUpdate` is the game audio update with the current chase camera; `RaceApp` calls the game
+audio, the 3D sources and the manager (NNS_SndMain) on every frame, also in the menus and while paused, plays the
+menu sounds, starts the front end and its music on the track list, stops it before a race (the front end's exit is
+not ported) and fades the car out under the result menu (port choice). Horn: H on the host, L on the PSP (the DS
+button was not identified).
+
+Output (`src/shim/common/snd_stream.*`): the main thread renders the driver after each game frame into a ring of
+16,384 frames, so the driver and every game sound call stay on one thread; the device takes from the ring (host: an
+SDL audio device at 32 kHz, the callback; PSP: a thread at priority 0x12 on a 32 kHz SRC channel, 512-frame blocks,
+`sceAudioSRCOutputBlocking`). Interactive runs render kRate / 30 samples per frame corrected by an eighth of the
+distance to a target fill (two frames plus a block, about 80 ms), which follows the device's clock; scripted runs
+render exactly kRate / 30 with the remainder carried, so their sound is the same on every platform. An empty
+`mute.txt` next to the EBOOT turns the sound off (host: `--mute`, `--no-music`).
+
+Checks: `tm_race --frames N --auto --wav out.wav` prints the FNV-1a hash of the rendered sound, the PSP auto run
+prints it in `race_log.txt` (`race_shot.ps1 -Wav` also copies the PSP's WAV); **car, camera and sound identical to
+the host** after easy/0 150 frames and hard/0 600 frames in PPSSPP. `race_shot.ps1 -Screen audio` runs the auto drive
+with the audio thread playing: hard/0 600 frames, 0 underruns, 0 dropped frames. The car and camera after 300 frames
+of easy/0 are those of the build before the sound (the sound code does not touch the race). 114 checks, 0 errors;
+reload test (32 loads) constant (heap 2,657,704 bytes after every unload from the 4th on: the archive is loaded once).
+PPSSPP: sound rendering 2.7 ms per 30 Hz frame on easy/0, 2.9 ms on hard/0 (8 % of the frame at 222 MHz); the
+console's own figure is in the R overlay (second number) and `frametimes.txt` (`snd`).
+
+### Step 7: the four environments (done; console test pending)
+
+The ported loaders already took the environment from the race setup; only the application was Coast-only.
+`RaceSession::Load` now takes the scene path (`isl/easy/0`): the environment's piece catalogue, car (`isl`, `sno`,
+`sta`: parameters, lod1, wheels, shadow), cameras, texture batch, lighting, sky (Island's own scale, the others
+Coast's: ov003 0x0211de20 only tests Island) and ground drawer (`misc/<islandSea|snowSnow|stadiumGrass>`: the sea's
+drawer, scrolling only on Island and Coast) and the race sounds (SEQARC_<env>, its music, SEQARC_CAR_<env>). The
+menu lists the 26 tracks of each environment in the game's order (Stadium, Island, Snow, Coast): left / right change
+the environment, up / down the track; "next track" stays in the environment. Track ids are now `coa/easy/0`; ids
+without an environment (old save files, `--track easy/0`, `auto.txt`) are Coast tracks.
+
+Checks extended to the 104 tracks (`run_checks.py --env all`: 426 checks, 0 errors; the default stays Coast, the
+114 checks of the PSP suite):
+- `tm_trackdump --env` and `tm_physics --env` (new) produce the dumps; the piece catalogues of Island, Snow and
+  Stadium were decompiled with unluac like Coast's.
+- `check_track.py`: the footprint used Coast's 16-unit cells (Island 64, Snow and Stadium 32); the Lua evaluator
+  missed unluac's `t[var] = value` keys (ColumnNotches, DisableNotch, Cullable...): the 6 catalogue differences it
+  reported were checker errors, the port was right. Stadium's zeppelin overhangs its cells by 2.43 (tolerance 2.5).
+- `check_terrain.py` covers Island (its terrain names from the ROM table, ground level 0, 64-unit cells): the 26
+  Island terrains match the re-implementation; Snow and Stadium must have none.
+- `check_triggers.py` takes the environment from the dump (Island's start point offsets of ov003 0x02114a6c).
+- `check_progress.py`: the respawn puts the car on the first surface of a segment from 2 units above the respawn
+  point to 8 below; Stadium's tilted checkpoints lie up to 3 units below their InitPos (the check expected above).
+- PPSSPP: car, camera and sound identical to the host after 150 frames on isl/easy/0, sno/easy/0 and sta/easy/0.
+
+**Detail levels for the GE** (PSP only; `G3SetDrawDetail`, `RaceSession::detail`). Splitting every triangle to 3
+units for the guard band made Island's pieces (64-unit cells) 15 MB of vertices and 1.07 million vertices per frame
+(Coast hard/0: 146,000), far beyond what the GE can fetch at 30 Hz. Each piece is now converted at three levels:
+edges up to 3 units (`guardEdge`), 8 and 24, and drawn with the coarsest level whose edge is at most 2.5 times
+smaller than the distance from the eye to its bounding sphere (20 and 60 units). A triangle with edges E whose
+vertices are all 2.5 E away stays within about 70 degrees of the view axis when part of it is visible, inside the
+guard band (about 82 degrees at 480 x 272 with the 70 degree FOV). Vertices per frame (PPSSPP, 150 frames of auto
+drive): Coast hard/0 146,000 -> 43,500, Island easy/0 1,067,000 -> 162,000, Snow 390,000 -> 37,000, Stadium 371,000
+-> 104,000; mesh memory +20 % (Island 18.6 MB, heap 23.5 MB of 52); images unchanged but for the interpolation of
+lit colours and fog over the longer far edges (at most 1,942 pixels of 130,560 differ by more than 24 levels).
+The largest Island pieces stay fine-split while the camera is over them: the next step if the console is slow there.
+
+Reload test: `reload_test.ps1` now loads the tracks in menu order (Stadium first) and compares the states per
+environment (the piece catalogue kept between races has a size per environment); `-Count 208` makes two rounds of the
+104 tracks: in the second round every environment comes back to one state (no leak; a few containers keep the
+capacity of the largest track seen, +640 bytes for Stadium once Island and the others have been loaded).
+
+### Step 8: platform mode, retries, Stadium rings (done; console test pending)
+
+- **Retries** (`dsRaceProgress::RespawnRequest` / `Restart`, dsRace_Update ov003 0x02113048): every respawn (the
+  button or the player's own request: sinking, stuck) counts one retry (race +0x14c), or resets the count to 0 when
+  no checkpoint was passed (back to the start); the restart button sets it to 0. On Stadium a respawn whose only
+  checkpoint is a ring (pieces 0x10 cpringh / 0x11 cpringv, which give no respawn point) restarts the race.
+  `lastCheckpoint` = race +0x138. Checked with `tm_race --respawn-at F` (repeatable): 1, 2, 3 after coa/hard/0's
+  first checkpoint, 0 before it.
+- **Stadium's horizontal ring** (piece 0x10): its trigger matrix is turned a quarter (angle 6432) about its scaled
+  row 0 (ov003 0x021114e4, MTX_RotAxis + MTX_Concat33), now in `dsTrigger::PieceMatrix`; `check_triggers.py`
+  models it (sta/practice/2 has two).
+- **Platform mode** (race mode 8, `Scenes/pla/<difficulty>/<n>`, 17 tracks, environment n = 0..3 read from the
+  scene header): `RaceSession::Load("pla/easy/1")` sets mode 8; the HUD shows "Retries N" (string `Retries`, French
+  "Tentatives") under the clock (`dsHud::SetRetries`, port stand-in for the bottom screen panel +0x32c, 0x0210b53c,
+  whose other lines are `TargetText` and `BestTriesText`). Menu section "PLATE-FORME"; best = fewest retries then
+  time (`retries <track> N` lines in save.txt); medals from `config/PlatformProgression` (main 0x020b1f70:
+  {difficulty, number 1..17, medals to unlock, gold, silver, bronze retries at most, coppers}): gold 0, silver
+  7/6/5/4/3 by difficulty, bronze 10, shown on the result panel. Unlocking is not ported (all tracks open).
+- Not done: **puzzle mode** (mode 7, `Scenes/puz/*` with `-Layout` scenes: the player places pieces; needs the
+  editor's piece placement and UI), the platform "Target" line, the bottom screen panel itself.
+
+## Reprise 2 (2026-10-20 soir, pause demandée en cours de travail)
+
+Retour console du PSP-3000 : ralentissements (Coast, pire sur Stadium), textures qui clignotent (start gate, drapeaux,
+panneaux fléchés), objets qui se superposent, son des voitures qui part ou se coupe au hasard, Snow très bugué.
+Skill `psp-developer` (SandstoneDev) installé dans `~/.claude/skills`. **PPSSPP en rendu logiciel** (`SoftwareRenderer =
+True` dans ppsspp.ini) reproduit les artefacts du GE ; le rendu Vulkan ne les montre pas.
+Corrigé dans l'arbre de travail (non commité, hôte et PSP compilent sans avertissement, voiture/caméra/son identiques
+à l'hôte sur coa, sno, sta, isl ; checks complets pas encore relancés) :
+- **Son** : `dsSound3D::Compute` oubliait le `m_playing--` du DS (0x02060118) après la fin d'un son ponctuel ; après 8
+  dérapages/chocs plus aucune source ne démarrait (moteur compris). Vérifié sur l'hôte (compteur = sons joués).
+- **Textures** : le GE lit les coordonnées de texture 16 bits en non signé ; 5 à 13 % des triangles chevauchaient 0
+  (rayures, damiers en moiré). `RebaseTexCoords` / `TexPeriod` (g3d_gu.cpp) décalent chaque triangle et chaque case
+  de la mer d'un nombre entier de répétitions ; sommets en u16. 0 coordonnée tronquée.
+- **Ordre de dessin** : tous les opaques de l'image puis tous les translucides, comme le DS (`G3Model::Draw(batch,
+  pass)`, les deux pilotes) ; avant, une pièce dessinée plus tard recouvrait le feuillage/filet d'une pièce plus proche.
+- **Caméra relative** (PSP) : vue sans translation, l'œil retiré des matrices et des sommets de la mer (float24).
+Écartés par essai : plan lointain (MinZ 1) et précision de profondeur (near 2.0), sans effet.
+Vérifié (suite de la reprise) : `run_checks.py` 114 et `--env all` 426 à 0 erreur, `check_culling.py` 0 différence
+(26 pistes x 3 images), `run_checks_psp.ps1` 114 dumps identiques, `reload_test.ps1` 32 sans fuite.
+Performances (fait, à mesurer sur la console) :
+- CPU à 333 MHz / bus 166 (`scePowerSetClockFrequency` en tête de `main`, psppower) ; `race_log.txt` et l'en-tête de
+  `frametimes.txt` donnent l'horloge lue après coup.
+- Recouvrement CPU/GE : la boucle fait mise à jour + son pendant que le GE dessine l'image précédente, puis
+  `sceGuSync`, rythme 30 Hz, échange des tampons, construction de la liste. « ge » = attente restante du GE après la
+  mise à jour. `~G3Model` attend le GE s'il a des données côté GE (le modèle `hud/backing`, lu sur le CPU, est
+  détruit dans une liste ouverte : un sync inconditionnel bloquait). Sync avant la capture des runs scriptés.
+- Son produit pour la durée réelle de l'image (`FrameSamples(target, frameUs)`, plafonnée à 100 ms) : une image en
+  retard (50 ms) vidait l'anneau, d'où des coupures. Runs scriptés inchangés (kRate / 30).
+PPSSPP : coa/hard/0 300 images, isl, sno, sta easy/0 et pla/easy/1 150 images identiques à l'hôte ; thread audio
+600 images sans trou ; 32 rechargements sans fuite. Paquet `package.ps1 -Perf` (ajoute `perf.txt`).
+
+## Reprise 3 (2026-10-21) : retour console du paquet « perf », décors, sol, son moteur
+
+**Console (PSP-3000, `frametimes.txt`)** : plus de ralentissement ni de texture qui clignote. CPU lu à 333/166. Sur
+Coast hard/0, Stadium practice/0 et easy/0, Island easy/0 et Snow easy/0 : `late 0` à chaque seconde, sauf la
+seconde du chargement ; `ge 0.0` (le GE finit avant la fin de la mise à jour). Pire seconde en travail CPU : Island,
+mise à jour 9-11 + son 2-3 + liste 18,7 ms = environ 32 ms sur 33. Stadium : mise à jour 15 ms (practice/0). Signalé
+encore : Coast, dessous des routes « sans texture » ; Snow, impression de rouler au-dessus du vide, éléments
+disparus, route transparente avant l'arrivée d'easy/0 ; son moteur toujours « à fond ».
+
+Corrigé (non commité ; hôte et PSP compilent sans avertissement) :
+- **Commandes de rendu NNS** (`G3Model::Load`, commun) : la table du nombre de paramètres avait deux entrées de trop
+  avant 0x40, donc 0x44 (MAT) se lisait comme inconnue et arrêtait le bytecode : 37 modèles de Snow (48 dessins,
+  dont le dessus de `WoodRoadStraightAir`, la route avant l'arrivée d'easy/0) et les îles d'Island perdaient leurs
+  derniers dessins. Remplacée par un `switch` (valeurs de nitro3d.py).
+- **Piliers de Snow** (`dsTrackPiece::pillars`, ov003 0x0211fe08 fin, 0x0211ef00, 0x0211ee60) : une pièce en l'air
+  (case y au-dessus du niveau du sol) porte un pilier `<nom>pillar1/2/4/8` par bit de sa hauteur en cases (1 à 15),
+  empilés depuis le sol (8 unités par case, fixé dans le code, + 0,35) ; ce sont des pièces avec modèle et collision,
+  hors de la liste de la piste. sno/easy/0 : 9 piliers.
+- **Sol** (ov003 0x0211de20, monde de collision vtable +0x10 = 0x0205b4bc) : un plan horizontal, y = 0 matériau 1
+  (rugueux) sur Stadium et Snow, fond de mer y = -16 (Island) et -19 (Coast) matériau 3. `RaceSession::groundPlane`.
+  Avant, une voiture sortie de la piste tombait sans fin sur Snow et Stadium.
+- **Décors** (`RaceSession::scenery`, ov003 0x0211d37c / 0x0211d02c / 0x0211ccec / 0x0211ca88) : Stadium 2 tribunes
+  `Tracks/sta/StadiumSide` et 2 écrans `StadiumScreen`, Island 2 `misc/island/large` + 2 `small`, Snow 2
+  `misc/snow/lg_snow` + 2 `sm_snow`, Coast `misc/coast/coastbackground` ; positions de la table autour du centre de
+  la grille (320 ou 640), nœuds 1 et 3 (et Coast) tournés d'un demi-tour. Ils sont à 71 unités au moins de la zone
+  de jeu (Coast 225) ; les pilotes les dessinent après le ciel avec son plan lointain (4000 ; celui de la course,
+  600, les coupait), testés en profondeur entre eux, puis effacent la profondeur avant la piste (choix du portage ;
+  ordre 0x15 du DS respecté). PSP : découpe `guardEdge` 28 / 36 / 28 / 90 (2,5 fois moins que leur distance).
+  Sommets par image (PPSSPP, 300 images) : Coast hard/0 43 500 → 77 300, Stadium easy/0 104 000 → 146 000, Island
+  162 000 → 184 000, Snow 37 000 → 68 000.
+- **Son moteur** (`dsCarAudio::SoundRpm`, ov003 0x020f799c) : le 3e argument (octet +0x0c de l'audio voiture nul,
+  remis à 0 par `dsHumanPlayer_Reset`) prend le régime et le rapport de l'entité voiture, que la mise à jour du joueur
+  (0x0210ed9c) copie du moteur : rapport = moteur +0x20, régime lissé vers moteur +0x2c (0,3 de l'écart par image en
+  descendant, 0,1 en montant : 0x0210f300 / 0x0210f304). Le portage prenait toujours le « régime sonore » tiré de la
+  vitesse (7000 à 9000 dans chaque rapport), d'où un moteur toujours à fond.
+- Outils : `tm_race --view ex,ey,ez,ax,ay,az` et `view.txt` à côté de l'EBOOT (PSP) : caméra fixe d'inspection.
+  `RaceSession` signale un modèle de pièce introuvable (`no model ...`).
+Coast, dessous des routes : texturé sur l'hôte et dans PPSSPP (Vulkan et rendu logiciel) aux mêmes points de vue ;
+pas reproduit, photo demandée.
+Vérifié : `run_checks.py` 114 et `--env all` 426 à 0 erreur, `run_checks_psp.ps1` 114 dumps identiques, PPSSPP
+coa/hard/0, isl, sno, sta easy/0 et pla/easy/1 300 images identiques à l'hôte, thread audio 600 images sans trou,
+`check_culling.py` 0 différence, `reload_test.ps1 -Count 242` (deux tours des 121 pistes du menu) sans fuite : le
+script supposait encore 104 pistes de 26 par environnement et lisait les pistes de plate-forme comme une fuite ; il
+prend maintenant l'environnement de chaque piste dans le journal. Paquet `package.ps1 -Perf` prêt.
+
+## Reprise 4 (2026-10-21) : retour console de la reprise 3
+
+**Console** : `late` 2 à 5 en une à deux minutes par piste ; `ge` à 0 sauf Stadium (pointe 10,2 ms) et Island
+(1,3) ; pire seconde mise à jour + son + liste : Island 33,9 ms. Photos : les dessous des routes en l'air sont
+transparents sur Coast et Snow (on voit le ciel, de dessus tout est normal) ; feux de départ gris fixes ; son moteur
+« toujours à fond ». Le ciel et les logos du stade seraient animés sur DS (pas fait, priorité aux bugs).
+
+- **Son moteur** (`ConvRpm`, ov003 0x020f93e0) : 0x0201201c avec 0x3fe00000 est `_dadd` 0,5 (l'arrondi des doubles,
+  `dsRoundD`), pas un produit : seuils = valeur / 1024 x MaxRPM. Le portage les divisait par deux : RevMed se coupait
+  à 7031 tr/min alors que le moteur tourne de 6000 à 9000 en course, donc moteur muet ou couche moyenne au maximum.
+  Trace hôte coa/hard/0 : ralenti 2000 tr/min = Idle 89 / RevLow 26 ; en course RevLow 110 et RevMed 85 à 127 (volume
+  et hauteur) selon le régime.
+- **Feux de départ** (main 0x0206aaf4, ov003 0x02114ee4) : les matériaux `StartRed` / `StartAmber` / `StartGreen`
+  (StartDonut du Stadium) ont des contrôleurs de lumière 0 / 1 / 2, couleurs 0x1f / 0x3ef / 0x3e0 ; le décompte met
+  rouge 13 au-dessus d'1 s, orange 13 jusqu'à 0, vert 13 à 0 (niveau = alpha ; niveau 0 = forme cachée). Les
+  surcharges de matériau (`G3Model::overrides`) s'appliquent maintenant aussi aux matériaux du lot (indice du lot) ;
+  `RaceSession::startLights`, `ApplyStartLights`. Coast et Island n'ont pas ces matériaux.
+- **Dessous transparents** : pas reproduits (hôte, PPSSPP Vulkan et rendu logiciel). Communs aux dessous : normale
+  vers le bas, matériaux « faces avant » opaques, textures surtout 4 bits (underside1, SnowRoadWood2/3, GWunder,
+  underside), mais des toits 4 bits s'affichent. Instrument : `diag.txt` (`package.ps1 -Diag`), au premier
+  lancement 3 vues fixes sous des ponts (sno/easy/0, coa/easy/0 x 2), 7 variantes chacune (normal, sans culling, sans
+  brouillard, sans texture, sans test alpha, texture seule, tout) en `diag_<vue>_<variante>.bmp`, puis le jeu
+  continue (`RunDiag`, `G3GuSetDebug`). La variante qui fait apparaître les dessous désigne la cause.
+Vérifié : 114 et 426 checks, 114 dumps PSP identiques, PPSSPP coa/hard/0, isl, sno, sta easy/0, pla/easy/1 300 images
+identiques à l'hôte, thread audio sans trou, 32 rechargements sans fuite. Paquet `package.ps1 -Perf -Diag`.
+
+## Reprise 5 (2026-10-21) : retour du diagnostic console
+
+Console : son moteur et feux de départ validés par l'utilisateur. `frametimes.txt` : `late` 1 à 2 par piste (au
+chargement), `ge` 0 sauf deux secondes de Stadium (9-11 ms).
+- **Diagnostic** : sur console, les dessous des ponts sont **visibles** dans les 21 captures, variante normale
+  comprise. Le diagnostic dessine toutes les pièces au niveau de détail 0 (le plus fin) ; en course, les pièces à
+  plus de 20 / 60 unités prennent les niveaux 1 / 2 (arêtes de 8 / 24 unités). PPSSPP montre les dessous aux trois
+  niveaux. Le diagnostic capture maintenant les niveaux 0, 1, 2 puis, au niveau 2, sans culling, sans texture, sans
+  test alpha et tout coupé (variantes 00 20 40 41 44 48 5f, bits 5-6 = niveau) sur 4 vues (Snow près / loin, Coast
+  près / loin). Prochaine étape : les captures console.
+- **Terrain selon l'ordre des pistes** (`dsPieceDataTable::Load`) : le niveau du sol (3 sur Coast, 0 ailleurs)
+  n'était fixé qu'à la construction du singleton, donc par le premier environnement chargé. Coast après un autre
+  environnement n'avait plus de terrain (0 pièce au lieu de 44 sur easy/0 : ni îles ni falaises), Snow après Coast
+  perdait ses piliers (109 pièces au lieu de 113), Island après Coast une partie de son terrain (29 au lieu de 33).
+  Vérifié dans PPSSPP : coa → sno → coa → isl → sta → coa donne 44 / 113 / 44 / 33 / 0 / 44.
+- `view.txt` (PSP) prend un 7e nombre facultatif, le niveau de détail.
+- **Dessous transparents : cause trouvée pour Snow** (console : « plus de problème » avec ce paquet). Le diagnostic
+  console montre les dessous aux niveaux 0, 1 et 2 dans toutes les variantes : le rendu n'y est pour rien. C'est le
+  niveau du sol ci-dessus : une pièce n'utilise son modèle « air » que au-dessus du niveau du sol ; sur Snow (ou
+  Island) joué après Coast, le niveau valait 3 au lieu de 0 et les pièces à 1-3 cases de haut prenaient leur modèle
+  « ground », qui n'a pas de dessous (19 paires sur 46 à Snow, 26 sur 42 à Coast, 29 sur 80 à Island : le modèle air
+  a des faces vers le bas, le ground aucune). Reproduit sur l'hôte en forçant le niveau 3 sur sno/easy/0 : le bout
+  de `roadwood_bislope_end` (case y = 2) n'a plus que son contour vu d'en dessous, comme sur la photo. Les photos de
+  Coast venaient de la première course de leur session (bon niveau) : non expliquées ; à surveiller.
+Vérifié : 114 et 426 checks, 114 dumps PSP identiques, coa/hard/0, sno et sta easy/0 identiques à l'hôte,
+32 rechargements sans fuite. Paquet `package.ps1 -Perf -Diag` (4 vues x 7 variantes, environ 11 Mo de BMP).
+
+## Reprise (état au 2026-10-20, fin de session)
+
+Tout le travail des étapes 6 (son), 7 (quatre environnements, niveaux de détail GE) et 8 (plate-forme) est **dans
+l'arbre de travail, non commité** (l'utilisateur valide les commits lui-même). Pour reprendre :
+1. `cmake --build build/host` et `bash tools/psp_build.sh` (0 avertissement attendu).
+2. Vérifications : `python -P tools/host/run_checks.py` (114, Coast) et `--env all` (426) à 0 erreur ;
+   `tools/psp/race_shot.ps1 -Track coa/easy/0` puis `pla/easy/1` : voiture, caméra et son identiques à l'hôte ;
+   `tools/psp/reload_test.ps1` (32) sans fuite (`-Count 208` : deux tours complets, à relancer une fois avec le
+   critère final, environ 8 min) ; `tools/psp/run_checks_psp.ps1` (114 dumps identiques, vérifié avant l'étape 7).
+3. Proposer les commits par étape (6c son, 7 environnements + LOD, 8 plate-forme), puis `tools/psp/package.ps1`
+   pour le test console (son, vitesse du GE sur Island, médailles plate-forme).
+Pistes suivantes : mode puzzle (placement de pièces : à partir de l'éditeur), front end du jeu (ov004), écran du bas
+(temps cible / meilleur, retries) dans un coin, LOD par région pour les grandes pièces d'Island si la console rame.
+Pièges de l'environnement : les heredocs bash de l'outil transforment `\\n` en vrai saut de ligne (écrire les
+scripts d'édition avec l'outil Write) ; Python sous Windows écrit en CRLF sans `newline=''`.
+
 ### Bugs reported on the PSP-3000 after run 1 (fixed in run 3; console test pending)
 
 - **0c, boosters pushing sideways** (`dsTrack::PieceRotationAt`, game logic): main 0x0208cb80 adds half a cell to x
@@ -941,6 +1217,28 @@ the backing's panel +0x14 belongs to another HUD part. The sea is done in step 5
 - **Sound** (`audio/sound_data.sdat`, SSEQ/SBNK/SWAR, sceAudio) and the **animated sea backdrop**
   (`Misc/CoastSea`, ov003 0x0211de20 / 0x0213079c) are not started.
 
+## Bilan de la phase 5, run 4 (rapport, 2026-10-20)
+
+**Ombre noire, jeux d'éclairage, messages du HUD, mer animée et son : la phase 5 a fait le tour de ce qui manquait à
+la course Coast.** Tout est vérifié sur l'hôte et dans PPSSPP ; l'effet sur la console reste à confirmer.
+
+- Ombre de la voiture noire (émission du matériau, alpha 14/31) et jeux d'éclairage remis dans le bon sens (voiture =
+  jeu 0, piste = jeu 1) ; messages du HUD (« Roue libre ! », checkpoints manqués) avec les polices, la mise en page
+  et les chaînes localisées du jeu ; la mer telle que le jeu la dessine (5 x 5 quads translucides texturés qui
+  défilent, abaissés quand la caméra monte).
+- Son (étape 6) : le pilote son du DS sur le CPU (séquenceur SSEQ, 16 canaux, PCM/ADPCM, 32 kHz) sous les couches du
+  jeu (gestionnaire de sons, sources 3D, audio de la voiture, état audio) ; musique Coast et musique du menu, moteur
+  à trois couches, dérapages, chocs, klaxon (L), compte à rebours, checkpoints, sons des menus ; fondu du moteur à la
+  pause. Sur PSP un thread audio joue le son sur un canal SRC de sceAudio.
+
+Vérifications : hôte et PSP sans avertissement, 114 vérifications à 0 erreur, voiture, caméra **et son identiques à
+l'hôte échantillon pour échantillon** dans PPSSPP (easy/0 150 images, hard/0 600 images), thread audio sans trou
+(600 images), 32 rechargements à tas constant. Coût du son dans PPSSPP : 2,7 à 2,9 ms par image (8 %).
+
+**Prochaine étape = test console** (copier `build\psp\package\PSP`, 28,8 Mo) : écouter le son (moteur surtout : sa
+courbe de régime suit le code mais mérite une écoute comparée au DS), regarder le temps du son dans l'overlay R
+(deuxième nombre). Ensuite : les trois autres environnements (Island, Snow, Stadium), puis le front end du jeu.
+
 ## Bilan de la phase 5, run 3 (rapport, 2026-10-20)
 
 **Nettoyage, les 4 bugs signalés sur PSP-3000 et le HUD terminés ; ombre et panneaux du HUD en plus.** Tout est
@@ -988,3 +1286,294 @@ identiques à l'hôte, état voiture/caméra PSP = hôte (easy/0 150 images, har
 **Prochaine étape = test console par l'utilisateur** (copier `build\psp\package\PSP`) : menu et records, vitesse
 (touche R ou `perf.txt` -> `frametimes.txt`), aspect (ciel, ombrage, roues, pas de triangles manquants). Selon les
 temps mesurés : optimisations GE supplémentaires ou suite de la fidélité (HUD, son).
+
+## Phase 6 : le front end (en cours, 2026-10-21)
+
+Demande : interface fidèle au DS en contenu, présentée comme le menu de TrackMania Wii adapté au 16:9 (maquette de
+l'utilisateur), fond `assets/fe/background.png` (fourni par l'utilisateur, pas dans la ROM). Ordre : front end, puis
+fantômes, puis éditeur ; multijoueur en bonus à la fin.
+
+Inventaire du DS (ov004, 1308 fonctions, 219 Ko, rien de nommé encore) : chaque écran est une classe dont deux
+petites méthodes rendent ses fonds `FrontEnd/Screen/<nom>TopBG` / `...BottomBG` (105 fonds, 256 x 192, NSCR + NCGR +
+NCLR), une son titre et une sa liste de boutons (clés de `strings/main/frontend`, 904 chaînes). Menu principal :
+SoloButton, EditorButton, NetworkButton, ShopButton, ProfileButton, OptionsButton ; Solo : Race, Puzzle, Platform,
+QuickRace, CustomRace ; puis choix d'environnement, de difficulté, de piste (ChallengeBottomBG, sprites lettres,
+chiffres, médailles, cuivres), résultats, profil (nom, véhicule en 3D, statistiques), options (langue, commandes,
+affichage, son, effacement, crédits), boutique (pistes, blocs, skins). Données : `Scripts/config/RaceProgression`,
+`PlatformProgression`, `PuzzleProgression`, `TrackShop`, `BlockShop`, `SkinShop`, `rewardShop`, `challenges`, `ui`.
+Ressources 2D : sprites `FE/Cell/*` (icônes d'environnement, médailles, cuivres, difficultés, casque), polices
+`Fonts/Cell/Font20/24/28/32/40_White` (sans-serif arrondie proche de celle de la Wii).
+
+Maquette : `tools/fe/mockup_main.py` (Python, ressources du jeu + fond) : titre en onglet, trois cartes (illustrations
+du haut du DS : SinglePlayerTopBG, EditorTopBG, MultiplayerTopBG), trois boutons larges (Shop, Profile, Options),
+sol blanc courbe, sélection au pad (carte agrandie, contour bleu), rappel des touches.
+
+### Étape 1 : le moteur de menu et les écrans (fait ; test console à faire)
+
+Le menu provisoire de `RaceApp` est remplacé par le front end, commun à l'hôte et à la PSP (même API : `Start`,
+`FindTrack`, `NextTrack`, `Unload`, `RaceTracks`, `screen`, `race`, `menus`, auto.txt / reload.txt / diag.txt,
+`--frames/--screen/--finish-at` inchangés ; les 114 / 426 vérifications, la PSP et `race_shot` sont identiques).
+
+- **Dessin** `src/app/fe_canvas.*` : `FeCanvas` dessine en coordonnées 480 x 272 (1:1 sur PSP, x1,6 centré sur la
+  fenêtre 768 x 576 de l'hôte) par trois rappels du pilote : image (`FeImage`, modulée en couleur), cellule DS
+  (modulée), rectangle. Panneaux arrondis en 9 morceaux d'un disque anticrénelé généré (32 x 32, 8888), texte avec
+  les polices DS `Font20/28/32/40_White` (métriques de `dsFontManager`, `dsTextLayout`, glyphes rendus blancs puis
+  teintés ; le haut des capitales vient des pixels, les boîtes des cellules étant celles des OAM), icônes DS
+  `FE/Cell/Coppers` (médailles bronze / argent / or, pièce), `EnvIcons`, `DifficultyIcons` (palette `FrontEnd.NCLR`).
+- **Images** : `tools/fe/convert.py` convertit hors ligne le fond et les cartes de l'utilisateur (`assets/fe`) et 33
+  fonds hauts du DS (partie au-dessus du bandeau titre) en fichiers `.fet` (5650 opaque, 8888 pour les icônes,
+  largeur puissance de 2, 1,2 Mo en tout) dans `build/fe/data` ; la PSP les lit dans `fe/` à côté de l'EBOOT
+  (copiés par `race_shot.ps1`, `reload_test.ps1`, `package.ps1`, qui relancent la conversion si besoin), en RAM
+  (rien en VRAM). Hôte : `--fe <dir>` (défaut `build/fe/data`). Tas PSP au menu : 3,5 Mo.
+- **Écrans** (`src/app/fe_menu.cpp`, textes des clés DS `strings/main/frontend` + `backend`, langue de la console
+  ou de l'option) : menu principal comme la maquette validée (cartes Solo / Éditeur « Bientôt » / Multijoueur
+  « Bientôt », boutons Boutique / Profil / Options, sélection agrandie au contour bleu, rappels X / O) ; Solo (Course,
+  Puzzle et Mes Circuits verrouillés avec les messages DS `lockedpuzzlemode` / `lockedcustommode`, Plate-forme
+  verrouillée tant qu'il manque une médaille dans un des 4 environnements `lockedplatformmode`, Course rapide) ;
+  environnement (4 cartes, médailles de l'environnement) ; difficulté (médailles par difficulté, verrou
+  « Remportez N Médailles en course pour déverrouiller cette difficulté ») ; liste des circuits (meilleur temps,
+  médaille, panneau : temps or / argent / bronze des fantômes fournis, meilleur temps ; piste 5 des difficultés
+  entraînement..difficile à acheter) ; heure du jour (course rapide : matinée / journée / soirée, appliquée à la
+  session) ; peinture (10 skins par environnement = `Cars/<env>/0..9`, appliquée) ; profil (nom = pseudo de la
+  console, véhicules, statistiques) ; options (langue, commandes, affichage = caméra basse / haute par
+  environnement, son = musique / effets du menu, données = effacer les temps ou tout, crédits) ; boutique (circuits
+  et skins par environnement avec prix en coppers, confirmation `shopconfirmpurchase`, `shopinsufficentfunds` ;
+  blocs verrouillés = éditeur). Pause (Reprendre / Recommencer / Passer circuit / Quitter avec confirmation) et
+  résultats (temps, meilleur temps, médailles remportées, coppers reçus, essais en plate-forme ; Réessayer / Course
+  suivante / Changer circuit / Menu principal) dans le même style. Transition simple (glissement + fondu, 6 images).
+- **Règles** (lecture des tables Scripts/config ; à confirmer dans ov004, voir plus bas) : une médaille par fantôme
+  battu (or = 3 médailles) ; les temps sont lus dans l'en-tête des fantômes comme le DS (`ov004 0x020fa3ec`,
+  porté : +8 si la version +4 vaut 6, appelé par l'écran de choix des défis `0x020fa49c` pour or, argent, bronze) ;
+  difficultés débloquées par le total de médailles course (RaceProgression : 0 / 40 / 90 / 140 / 190 / 200) ou
+  plate-forme (0 / 8 / 20 / 32 / 48) ; coppers = montant du défi (50..300) par médaille gagnée, rien en course
+  rapide ; TrackShop « StadiumA5 » = 5e piste de la difficulté de rang 0..3. La sauvegarde DS garde un u32 par défi
+  (104, `0x020a9678`), sans doute le meilleur temps : les médailles s'en déduisent, comme ici.
+- **Sauvegarde** `save.txt` : lignes existantes + `coppers`, `owntrack`, `ownskin`, `skin`, `camera`, `lang`,
+  `music`, `sfx`, `races`, `finishes` (les anciennes sauvegardes se relisent).
+- **Captures** : hôte `tm_race --frames 10 --screen menu --keys <touches>` (U D L R, O = X, B = retour) ; PSP
+  `race_shot.ps1 -Track menu -Frames 20 -Screen <touches>`.
+
+### Étape 2 : les fantômes (fait ; test console à faire)
+
+- **Format** (lu dans le DS) : en-tête `main 0x02095ad8` = u8 1, u8, u16 60 (ticks par seconde), u32 6 (version),
+  u32 temps d'arrivée, u32 taille du flux, u32 tours, u32 checkpoints, tours x checkpoints temps de passage, puis le
+  flux (certains fichiers ont des octets en plus après, inutilisés). Enregistrements `main 0x02095c5c` : octet de
+  drapeaux puis 1 : axe haut (ligne 1) += 3 x s16 ; 2 : axe avant (ligne 2) += 3 x s16 ; 8 : position x, z += 2 x
+  s16, sinon 0x10 : position = 3 x s32 ; 0x80 : durée en ticks (u8, sinon 1) ; 0x20 / 4 : un s8 chacun ; 0x40 : 4
+  octets. Lecture `0x02095f70` : un enregistrement par tick de 1/60 s, interpolé sur sa durée, ligne 0 = haut x avant.
+  Vérifié : le flux de chaque fichier testé est consommé exactement ; le premier enregistrement de coa/easy/0 est à
+  (131026, 90015, 589824), notre voiture au départ à (131030, 90029, 589824) ; le fantôme bouge au tick 8 (départ).
+- **Port** `src/game/race/dsGhost.*` (indépendant de la plate-forme) : `Load` (liste d'échantillons), `Matrix(tick)`
+  (position interpolée dans un enregistrement long), enregistrement (`BeginRecord` / `Record` une fois par image =
+  2 ticks : drapeaux 0x80 | 0x10 | 1 / 2) et `Save` au même format que le jeu.
+- **Course** : `RaceSession` enregistre la course du « go » à l'arrivée et dessine jusqu'à 3 fantômes (la caisse
+  seule, à leur matrice pour le tick de l'horloge de course) avec le modèle de la voiture rendu translucide
+  (`GhostLook` : alpha 12 sur tous les matériaux, feux cachés, surcharges remises après). `RaceApp::LoadGhosts` :
+  l'adversaire de la prochaine médaille à gagner (or une fois gagné ; défis course seulement : « Battez les Ghosts
+  des adversaires pour gagner des médailles ») et le meilleur passage du joueur (`ghost_<piste>.bin` à côté de
+  save.txt, écrit à chaque record). Options Affichage : « Ghosts concurrents » et « Ghosts joueur » Oui / Non.
+- **PSP** : la voiture éclairée à chaque dessin gardait l'alpha du maillage en cache ; `g3d_gu.cpp` prend
+  maintenant l'alpha du dessin (même arrondi que `GuSink::Color8888` : la voiture du joueur ne change pas). Coût
+  mesuré dans PPSSPP sur coa/hard/0 : dessin 4,68 -> 5,24 ms par image (+1 500 sommets), tas +370 Ko, `late 0`.
+
+## Bilan de la phase 6, run 2 (2026-10-21)
+
+Fait : moteur de menu commun, tous les écrans hors réseau et éditeur (dont pause et résultats), fantômes (temps des
+médailles, lecture, enregistrement, affichage). Vérifications : `cmake --build build/host` et
+`bash tools/psp_build.sh` sans avertissement ; `run_checks.py` 114 / 0 erreur et `--env all` 426 / 0 erreur ;
+`run_checks_psp.ps1` 114 / 0 différence ; `race_shot.ps1 -Track coa/hard/0 -Frames 300` voiture, caméra et son
+identiques à l'hôte, `late 0` ; `reload_test.ps1` 32 rechargements sans fuite ; captures des menus regardées (hôte et
+PPSSPP) ; `package.ps1 -Perf` fait (30,1 Mo).
+
+À tester sur la PSP-3000 :
+1. Démarrage sur le menu principal (fond, cartes, polices nettes à 1:1), navigation croix / X / O, sons du menu,
+   musique ; O sur le menu principal quitte le programme.
+2. Solo > Course > environnement > difficulté > circuit > peinture : la course démarre avec la peinture choisie ;
+   Course rapide > environnement > circuit > heure du jour (matinée / journée / soirée visibles en course).
+3. En course : le fantôme translucide de la médaille visée (bronze au début) part avec vous au « go » ; perf
+   (R : `late` doit rester à 0 avec le fantôme) ; START : menu pause dans le nouveau style, Quitter demande
+   confirmation.
+4. Arrivée : écran de résultats (temps, meilleur temps, médailles et coppers gagnés) ; refaire la piste : votre
+   fantôme (meilleur passage) apparaît aussi ; `ghost_<piste>.bin` est créé à côté de save.txt.
+5. Boutique : acheter une piste « 5 » et une skin avec les coppers gagnés ; Profil : nom = pseudo de la console,
+   statistiques ; Options : langue (le changement s'applique tout de suite), caméra haute / basse par
+   environnement, musique / effets, Ghosts concurrents / joueur, effacement des données.
+6. Verrous : Puzzle, Mes Circuits, Blocs (éditeur) et Plate-forme (une médaille par environnement) affichent les
+   messages du DS ; Éditeur et Multijoueur « Bientôt ».
+
+Reste (lectures à confirmer dans ov004, sans test console nécessaire) : le compte exact des médailles pour les
+déverrouillages, l'attribution des coppers, la correspondance TrackShop A..D = difficultés ; l'avatar et la saisie du
+nom (le pseudo de la console sert de nom) ; un aperçu 3D de la voiture au choix de la peinture ; le choix de
+l'adversaire (`selectghosttitle`) et la sauvegarde manuelle des fantômes (`saveghostbutton`).
+
+## Phase 7 : l'éditeur de circuits et le mode puzzle (2026-10-21)
+
+Demande : « passe à la suite » après la phase 6 (front end, fantômes) ; ordre convenu : éditeur, puis le reste du DS,
+le multijoueur en bonus à la fin.
+
+### Ce que fait le DS (lu dans ov002 et main)
+
+L'éditeur est ov002 (393 fonctions, chargé avec ov003, la course) : `build/decomp/ov002.c`, annoté par
+`tools/analysis/annotate_decomp.py` (valeur et chaîne de chaque littéral) en `ov002a.c`. Noms :
+`config/names/phase7_editor.txt`.
+- **Menu des blocs** (ov002 0x020e79d0 / 0x020e763c) : `Scripts/screens/<Env>/TrackPieceLayout`, une table Lua par
+  dossier, `{ FOLDER (4096) ou PIECE (0), nom, "0x<icône>" }`, racine `TopFolder` ; icônes des cellules de
+  `Editor/Cell/<Env>Folders` et `<Env>Blocks` (palette `Editor<Env>.NCLR`, 32 x 32, environ 190 par environnement).
+  Les puzzles ont leur propre menu `Scenes/puz/<diff>/<n>-Layout` : une seule liste, 4e champ = nombre de blocs.
+- **Grille** (main, singleton `*0x020d6628`, constructeur 0x0208da98) : un octet par case (indice de pièce),
+  tailles de `dsRaceSetup_GridSize` (20 x 20 x 20, Island et Coast 22 x 20 x 22 avec une bordure d'une case, +0x414),
+  au plus 250 / 127 / 240 / 127 pièces (main 0x020b8f5c). Une pièce occupe les cases de son `NotchData` tourné par
+  0x0209e0a8 (H couches, D lignes vers +z, W colonnes vers -x, W et D échangés aux rotations impaires) ; une pièce
+  de Snow sur piliers occupe aussi la colonne en dessous (0x0208d1d4 avec la pièce +0x94). Limites : 0x0208cf94.
+- **Poser** (ov002 0x020ddf98) : les pièces sous le bloc sont supprimées, sauf une pièce verrouillée du puzzle
+  (+0x77, 0x0208d098 : refus) ; puis le terrain de Coast / Island est reconstruit (ov003 0x02100b2c).
+- **Budget** (ov002 0x020f091c ; 0x020ebe14 ajout, 0x020ebfb4 retrait, 0x020ebe90 plein) : polygones = somme des
+  CostPoly, plein à 190 ; mémoire = une unité par pièce + CostMem au premier exemplaire de chaque id (le terrain ne
+  compte que son unité et ses polygones), plein à 612 / 630 / 612 / 642 ; pilier de Snow : table 0x020ee814 selon la
+  hauteur (x 2 si CostMem < 6). Jamais plein en puzzle (mode 7). Les pistes officielles dépassent parfois ces limites
+  (jusqu'à 211 polygones, 707 de mémoire sur coa/bonus/4) : elles n'ont pas été faites dans l'éditeur.
+- **Validation** (ov002 0x020e5808) : pas de départ ni multitours → `validate1startpiece` ; plus d'un →
+  `validateonly1start` ; départ simple sans arrivée → `validate1finishpiece` ; multitours avec un départ ou une
+  arrivée en plus → `validate1multilapnostartfinish` (le code 6 `validatecheckpoint` n'est jamais produit). Un
+  multitours passe le nombre de tours à 2 au moins. Puis course de validation : le temps devient le temps de
+  l'auteur, médailles + 2 / + 3 / + 5 s (0x0209fa5c).
+- **Objectifs** (ov002 0x020e3d68) : type de défi (course / plate-forme), difficulté, tours (2 à 30, multitours).
+- **Format compacté** des circuits perso (lecture ov003 0x02119bec + 0x0211a1f0, écriture 0x0211a7e0, bits de
+  poids faible d'abord) : 12 x (nom[i] 8 bits, auteur[i] 8 bits), tours 8, type 1, +0x02 8, environnement 3, heure du
+  jour 2, difficulté 4, date (année 7, mois 4, jour 5, heure 5, minute 6, puis 6 bits que l'écriture remplit avec
+  l'heure), temps auteur / or / argent / bronze en u32 (octet fort d'abord), 3 octets, nombre de pièces 7 (126 au
+  plus) ; par pièce id 8 + 2, rotation 2, case x, y, z 5 chacune. Le terrain n'est pas écrit.
+- **Son** (main 0x0208c3cc, `dsGameAudio::StartEditor`) : les archives des menus et `SEQARC_EDITOR` ; l'essai et la
+  validation jouent l'ambiance de l'environnement (environnement + 4 de 0x0208c04c).
+- **Déblocages** : Puzzle et Mes Circuits s'ouvrent quand un circuit validé est sauvegardé (`lockedpuzzlemode`) ;
+  puzzles : `config/PuzzleProgression` = { difficulté, numéro, médailles puzzle requises (0 / 8 / 20 / 32 / 48),
+  or, argent, bronze, coppers par médaille } ; le puzzle k d'une difficulté est `Scenes/puz/<diff>/<k>`,
+  environnement k.
+
+### Le portage
+
+- **Modèle** `src/game/editor/dsEditorTrack.*` (commun) : menu des blocs, grille d'occupation avec les masques,
+  `Place` / `CanPlace` / `Remove` / `Clear`, terrain reconstruit à chaque changement, budget, `Validate`, format
+  compacté (`SavePacked`, `LoadPacked`, `ReadHeader`), annulation (instantanés, ajout du portage).
+  `tm_trackdump --editor` charge les 104 pistes et les 17 puzzles dans ce modèle : toutes dans les limites, 0 erreur
+  de validation, aller-retour du format compacté identique (pièces, rotations, positions), toutes les entrées des
+  4 menus trouvées dans PieceData (75 / 57 / 55 / 53 dossiers, 172 / 144 / 130 / 123 blocs).
+- **Session** (`RaceSession`) : `Load` découpé en `Build` commun ; `LoadView` (décor, ciel, éclairage, lot de
+  textures sans voiture ni course) pour la vue de l'éditeur, `SyncPieces` après chaque modification (modèles chargés
+  une fois), `LoadTrack` (course sur une copie des pièces de l'éditeur, mode 6 = essai sans départ possible).
+  Dessins de l'éditeur : `editorDraws` (le bloc porté, translucide, teinté de rouge s'il ne peut pas être posé :
+  `GhostLook` généralisé) et `lines` (lignes en coordonnées monde, dessinées par les deux pilotes après les opaques).
+  `dsRaceProgress::Drop` place la voiture de l'essai.
+- **Écran** `src/app/editor.cpp` (+ `editor.h`, état `RaceApp::Editor`) : curseur sur la grille à la croix (selon
+  l'orientation de la caméra), L / R hauteur, stick = caméra orbitale (rotation, zoom), X poser (sans bloc : prendre
+  le bloc sous le curseur, le « Select » du DS), carré tourner, O effacer, triangle menu des blocs (gauche / droite,
+  X ouvrir, haut = dossier parent comme « Press Up to backtrack »), START menu (Reprendre, Tester, Valider,
+  Objectifs, Sauvegarder, Charger, Annuler, Tout effacer, Aide, Quitter ; puzzle : sans objectifs ni fichiers),
+  SELECT aide. Repères : bord de la zone de construction et grille locale à la hauteur du curseur, boîte du bloc
+  (bleue / rouge, jaune sur un bloc existant, orange s'il est verrouillé), colonne jusqu'au sol, jauge mémoire.
+  Saisie du nom par clavier à l'écran (12 caractères), écrasement confirmé, fichiers `tracks/<nom>.trk` à côté de
+  save.txt (mêmes octets que le DS). Les textes viennent des chaînes DS (`help*`, `customdata*`, `validate*`,
+  `exitconfirm`, `queryclearall`...) ; l'aide des commandes est un texte du portage.
+- **Front end** : carte Éditeur active → choix de l'environnement ; Solo > Puzzle (liste des 17, verrous par
+  médailles de puzzle, temps des médailles) ; Solo > Mes Circuits (circuits sauvegardés, non validés verrouillés avec
+  `customdatasavevalidatemsg`). Menus pause / résultats selon la course (`RaceApp::RaceMenu`) : essai et validation
+  (Reprendre, Recommencer, Editer le circuit), puzzle (… Modifier le puzzle, Puzzle suivant), Mes Circuits.
+  Sauvegarde : `editor 1`, `puzzle <n> <temps>`, `custom <temps> <nom>`.
+- **Pilotes** : manette de l'éditeur (`RaceApp::EditorPad`) ; hôte : flèches, Z X A S = croix rond carré triangle,
+  Q / W = L / R, Entrée = START, Tab = SELECT, J L / I K = stick ; `tm_race --editor <sta|isl|sno|coa|puz<n>>
+  [--pad <touches>]` ; PSP : `auto.txt` « editor:<...> <images> <touches> » pour les captures PPSSPP.
+- `G2CellBank` : l'atlas passe à 512 de large au-delà de 512 lignes (limite du GE ; les icônes de blocs faisaient
+  256 x 1024 et ne s'affichaient pas sur PSP).
+
+### Vérifié (2026-10-21)
+
+`cmake --build build/host` et `bash tools/psp_build.sh` sans avertissement ; `tm_trackdump --editor` 0 erreur ;
+`run_checks.py` 114 / 0 erreur et `--env all` 426 / 0 erreur (le découpage de `RaceSession::Load` ne change rien) ;
+`run_checks_psp.ps1` 114 dumps / 0 différence ; `race_shot.ps1` coa/hard/0 (300 images), sno/easy/0 et pla/easy/1
+(150) : voiture, caméra et son identiques à l'hôte, `late 0` ; `reload_test.ps1` 32 rechargements sans fuite.
+Éditeur, hôte et PPSSPP (scripts de touches) : palette et icônes, pose, rotation, suppression, terrain de Coast,
+validation refusée (message DS), course de validation (4,81 s sur l'hôte et la PSP) puis retour à l'éditeur avec
+or / argent / bronze, essai libre depuis le curseur, saisie du nom et sauvegarde (69 octets pour 5 blocs), « editor 1 »
+dans save.txt, Mes Circuits (liste, course, record « custom »), puzzles (Facile 1, Extrême 1 : blocs verrouillés,
+quantités, temps des médailles, menu pause du puzzle). PSP : tas hors capture du son identique après 1, 2 et 3
+allers-retours éditeur → validation → éditeur (6 348 600 octets).
+
+À tester sur la PSP-3000 :
+1. Menu principal > Éditeur de circuit > un environnement : vue, grille, curseur à la croix, caméra au stick,
+   L / R hauteur ; triangle : menu des blocs avec les icônes DS, X pour ouvrir / prendre, haut pour remonter.
+2. Poser, tourner (carré), effacer (O), prendre un bloc posé (X sans bloc) ; Coast / Island : falaises et plage
+   autour des routes au sol ; Snow : piliers sous les blocs en hauteur ; jauge mémoire.
+3. START > Tester (la voiture part du curseur ; START en course > Editer le circuit), Valider (messages DS si pas
+   de départ / d'arrivée ; à l'arrivée retour à l'éditeur avec les temps), Objectifs, Sauvegarder (clavier à
+   l'écran, START = OK), Charger, Annuler, Tout effacer, Aide (SELECT), Quitter (sauvegarde proposée).
+4. Après une sauvegarde validée : Solo > Puzzle et Solo > Mes Circuits s'ouvrent ; un puzzle (blocs comptés,
+   pièces du puzzle intouchables, Valider = course, résultats : Modifier le puzzle / Puzzle suivant) ; Mes Circuits :
+   course sur le circuit sauvegardé, médailles de sa validation. Fichiers : `tracks/<nom>.trk` à côté de l'EBOOT.
+5. Perf de la vue de l'éditeur (R n'affiche plus le chronométrage dans l'éditeur : c'est la touche hauteur).
+
+Reste (éditeur) :
+- ~~Boutique des blocs~~ : faite (Reprise 6).
+- ~~Dessin libre, placement du véhicule~~ : faits (Reprise 7). Reste la sauvegarde d'un fantôme par circuit
+  (`CustomDataSaveGhost`).
+- La musique de l'éditeur (le DS n'en lance pas dans `StartEditor` ; à confirmer), les budgets des pistes
+  officielles (au-dessus des limites : non utilisées dans l'éditeur).
+
+## Reprise 6 (2026-10-21) : retour console de la phase 7
+
+- **Musique hachée sur la page « Éditeur de circuit »** du front end : les pages sont reconstruites à chaque image
+  (`Items`), et celle-ci relisait le dossier `tracks/` et l'en-tête de chaque circuit sauvegardé, quatre fois par
+  image (Mes Circuits aussi) : accès carte mémoire en continu, images en retard, son coupé. La liste est lue une
+  fois (`RaceApp::SavedList`) et relue seulement après une sauvegarde ou une suppression.
+- **Flèches de sens des départs, arrivées, checkpoints et multitours** dans l'éditeur : le DS crée ces modèles
+  seulement dans les modes éditeur (drapeau `*0x021378dc`, mis par ov002, remis à 0 par la course ; main 0x0208cc74
+  les montre ou cache tous). `dsTrackPiece_CreateArch` (ov003 0x0211eac0) : le modèle `Misc/helpers/<env>/<Helper>`
+  de la pièce (Island, Snow, Coast), tourné comme la pièce, à la position de la pièce (pas le coin de l'empreinte),
+  décalé de 16 en x pour quelques portes de Coast larges de 2 cases tournées de 2 ou 3 quarts ; sans Helper
+  (Stadium) l'arche `Tracks/sta/Arch<type>` décalée de l'InitPos, puis `dsTrackPiece_CreateHelper`
+  (0x0211e74c) : la flèche `Tracks/sta/Arrow<type>` orientée par `dsMtx43_FromAxes` sur l'InitDir tourné par la
+  table 0x02134fbc (pi, 3pi/2, 0, pi/2), la pièce 0x10 de Stadium ayant sa flèche debout (quart de tour autour de
+  -X, 8 unités en z). Portage : `dsTrackPiece::EditorMarkers`, dessinés translucides (alpha 20, le +0x08 = 0x14 du
+  nœud) par l'éditeur (`editorDraws`, ghost 4, jusqu'à 64 dessins).
+- **Choix des fantômes adversaires** (course, hors course rapide et plate-forme) : le menu pause du DS a un
+  sous-menu « Concurrents » (ov003 0x02130a54 : Tous, Or, Argent, Bronze, Aucun, avec le temps de chaque fantôme) ;
+  porté dans le menu pause (le choix s'applique tout de suite) et dans Options > Affichage (« Ghosts concurrents »,
+  X fait défiler les cinq valeurs). Sauvegarde : `ghostchoice <n>` (l'ancienne ligne `ghosts 0 x` = Aucun).
+  Défaut : Or. Jusqu'à 4 fantômes dessinés (3 adversaires + le meilleur passage du joueur).
+Vérifié : hôte et PSP compilent sans avertissement ; `tm_race --track coa/easy/0` charge 1 / 1 / 1 / 3 / 0
+fantômes pour Or / Argent / Bronze / Tous / Aucun ; sous-menu capturé ; PPSSPP coa/hard/0 300 images identiques à
+l'hôte (`late 0`) ; marqueurs visibles dans l'éditeur (hôte : Stadium, Island, Coast ; PPSSPP : Stadium).
+- **Boutique des blocs** (suite de la phase 7) : `config/BlockShop` (main 0x020b1b4c : 147 blocs, `Name` =
+  `<STA|ISL|SNO|COA>_<nom PieceData>`, `Env`, `Price` en coppers de 5 à 50, `ViewScale` de l'aperçu 3D du DS) ;
+  main 0x020b21e4 dit si un bloc est vendu et pas encore acheté (comparaison du nom sans le préfixe, sans la
+  casse) ; ov002 grise alors son icône dans le menu des blocs et refuse de le prendre, sauf en puzzle. Portage :
+  `RaceApp::BlockLocked`, onglet Blocs de la boutique (environnement, liste avec l'icône de l'éditeur et le prix,
+  panneau avec l'icône en grand ; achat confirmé comme les pistes et les skins), dans l'éditeur icône grisée
+  marquée d'une pièce et message `lockedrequirementpurchase`. Sauvegarde : `ownblock <n>` ; « tout effacer » les
+  remet en vente. L'aperçu 3D tournant du DS (ViewScale) n'est pas porté : l'icône de l'éditeur le remplace.
+  Vérifié : achat (100 → 75 coppers, `ownblock 0`), Multilap grisé puis disponible dans l'éditeur, boutique
+  capturée sur l'hôte et dans PPSSPP.
+
+## Reprise 7 (2026-10-21) : dessin libre et placement du véhicule
+
+- **Dessin libre** (ov002 0x020e62cc / 0x020e5b48 / 0x020e5f58) : quatre blocs de route par environnement
+  (ov002 0x020eff0c : `straight corner tshaped cross`, Island `highway*`, Snow `woodroad*` dont `woodroadx`, Coast
+  `coastroad*`) et leurs côtés ouverts par rotation (ov002 0x020ee7a0, `[rotation][bloc]` = 5 12 13 15 / 10 6 14 15 /
+  5 3 7 15 / 10 9 11 15 ; bits 1 +z, 2 -x, 4 -z, 8 +x). Un bloc est créé avec la rotation de la table puis tourné
+  deux fois en arrière (ov003 0x0211fbd8), si bien que l'entrée de table d'un voisin à sa propre rotation donne les
+  côtés qui font face à la nouvelle case. À chaque pas du tracé l'ancienne case prend le bit du côté du pas plus
+  ceux de ses voisins et devient le bloc dont les côtés correspondent exactement (sinon elle ne change pas) ; la
+  nouvelle case est ajustée à ses voisins seuls, et devient une ligne droite dans l'axe du pas si rien ne
+  correspond (un cul-de-sac). La ligne droite du tout premier point est tournée dans l'axe dès que le tracé part
+  selon z (ov002 +0x44). Un bloc identique déjà en place est gardé (0x020e5a38 : une ligne droite retournée ou un
+  croisement tourné comptent pour le même) ; sinon le bloc remplace ce qui est dessous comme une pose normale. Le
+  tracé ne descend pas sous le niveau du sol (0x020df178). Portage : `dsEditorTrack::FreeDrawBegin / FreeDrawStep`,
+  mode « Dessin libre » du menu START de l'éditeur (X maintenu en déplaçant le curseur ; O pour finir ; une
+  annulation par tracé). `tm_trackdump --editor` trace une boucle, une traversée et un T dans les 4 environnements :
+  4 virages, 2 croisements, 1 T, aucun côté ouvert sans voisin.
+- **Placement du véhicule** (« Placing Vehicle... ») : le DS pose une pièce d'id -1, le modèle
+  `Tracks/<env>/TestArrow`, déplacée, montée et tournée avant l'essai ; la course part de sa position, direction -z
+  tournée de sa rotation. Portage : START > Tester ouvre ce mode (croix / L / R / stick comme le curseur, carré
+  tourne la flèche, X lance l'essai, O revient) ; la flèche garde sa place d'un essai à l'autre.
+- Script de touches de l'éditeur : `[` appuie sur X et le garde jusqu'à `]` (tracés dans les captures).
+Vérifié : `tm_trackdump --editor` 0 erreur ; captures hôte (boucle Stadium, flèche puis essai : voiture dans le sens
+de la flèche) et PPSSPP (boucle sur Coast avec le terrain automatique, flèche) ; aide de l'éditeur mise à jour.

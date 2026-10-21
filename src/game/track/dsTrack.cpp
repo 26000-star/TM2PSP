@@ -92,6 +92,7 @@ dsTrackPiece::dsTrackPiece(s32 id_, const VecFx32 &p, u8 rot) : id(id_), rotatio
 // @port ov003:0211fe08 partial
 void dsTrackPiece::SetPosition(const VecFx32 &p)
 {
+    VecFx32 old = pos;
     pos = p;
     const dsRaceSetup *setup = dsRaceSetup::Get();
     fx32 cw = setup->CellWidthFx(), ch = setup->CellHeightFx();
@@ -112,6 +113,56 @@ void dsTrackPiece::SetPosition(const VecFx32 &p)
         air = useAir;
     }
     UpdateTransform();
+    // The pillars follow the piece across, and are rebuilt when it changes height (piece data +0x55 bit 6).
+    if (info && info->hasPillars) {
+        for (dsTrackPiece *pl : pillars)
+            if (pl) {
+                pl->pos.x = pos.x;
+                pl->pos.z = pos.z;
+                pl->UpdateTransform();
+            }
+        UpdatePillars(old, false);
+    }
+}
+
+// @port ov003:0211ef00 done
+void dsTrackPiece::UpdatePillars(const VecFx32 &oldPos, bool force)
+{
+    if (!air) {
+        DeletePillars();
+    } else if (!pillars[0]) {
+        CreatePillars();
+    } else if (force || oldPos.y != pos.y) {
+        DeletePillars();
+        CreatePillars();
+    }
+}
+
+// A pillar per set bit k of the cell height (1 to 15 cells), pillar 2^k standing on the ones below it: its origin
+// is 8 units (Snow's cell height, fixed in the code) per cell below it, plus the 0.35 of every piece.
+// @port ov003:0211ee60 done
+void dsTrackPiece::CreatePillars()
+{
+    u32 levels = (u32)cell[1] & 0xff;
+    if (levels >= 16 || levels == 0)
+        return;
+    s32 below = 0;
+    int n = 0;
+    for (int k = 0; k < 4; k++, levels >>= 1) {
+        if (!(levels & 1))
+            continue;
+        VecFx32 p = {pos.x, dsRoundD(below << 15) + PIECE_Y_OFFSET, pos.z};
+        pillars[n++] = new dsTrackPiece(info->pillars[k], p, rotation);
+        below += 1 << k;
+    }
+}
+
+void dsTrackPiece::DeletePillars()
+{
+    for (dsTrackPiece *&pl : pillars) {
+        delete pl;
+        pl = nullptr;
+    }
 }
 
 // Rotation about Y by a quarter turn, then the translation: a piece of W x D cells grows towards -x and +z from its
@@ -147,8 +198,67 @@ void dsTrackPiece::UpdateTransform()
     matrix.m[3][2] = z;
 }
 
+// Arch / helper: the piece's quarter turn about Y at the piece position (not the footprint corner), moved by the
+// arch's InitPos (ground or air; none for a Helper model, but for Coast's 2-cell wide gates turned 2 or 3 quarters:
+// 16 units along x). Arrow: forward = InitDir turned by the second angle table (ov003 0x02134fbc: pi, 3pi/2, 0,
+// pi/2), up = +Y (dsMtx43_FromAxes), moved by the same InitPos; Stadium's piece 0x10 stands its arrow up instead
+// (a quarter turn about -X, 8 units along z).
+// @port ov003:0211eac0 partial (matrices and model names; the models are loaded and drawn by the editor screen)
+// @port ov003:0211e74c partial
+int dsTrackPiece::EditorMarkers(Marker out[2]) const
+{
+    if (!info || type < PIECE_START || type > PIECE_MULTILAP)
+        return 0;
+    static const char *const kTypes[5] = {"", "Start", "Finish", "Checkpoint", "Multilap"};
+    static const fx32 s_arrowAngle[4] = {0x3244, 0x4b66, 0, 0x1922};
+    const dsRaceSetup *setup = dsRaceSetup::Get();
+    MtxFx43 r;
+    fx32 a = s_rotationAngle[rotation & 3];
+    MTX_RotY43_(&r, dsSin(a), dsCos(a));
+    VecFx32 off = {};
+    if (info->helper.empty())
+        off = air ? info->initPosAir : info->initPosGround;
+    if (setup->environment == ENV_COAST && info->width == 2 && (u8)(rotation - 2) < 2 &&
+        (id == 0xd || id == 0x15 || id == 0x3c || id == 0xe8 || id == 0xc2 || id == 0x92 || id == 0xac))
+        off.x += 0x10000;
+    VecFx32 o;
+    dsVec_MulMtx33(&off, &r, &o);
+    Marker &arch = out[0];
+    arch.matrix = r;
+    arch.matrix.m[3][0] = pos.x + o.x;
+    arch.matrix.m[3][1] = pos.y + o.y;
+    arch.matrix.m[3][2] = pos.z + o.z;
+    if (!info->helper.empty()) {
+        arch.model = std::string("Misc/helpers/") + setup->EnvironmentName() + "/" + info->helper;
+        return 1;
+    }
+    arch.model = std::string("Tracks/sta/Arch") + kTypes[type];
+    Marker &arrow = out[1];
+    arrow.model = std::string("Tracks/sta/Arrow") + kTypes[type];
+    if (id == 0x10 && setup->environment == ENV_STADIUM) {
+        dsMtx43_Identity(&arrow.matrix);
+        VecFx32 axis = {(fx32)0xfffff001, 0, 0};
+        dsMtx43_RotateAxis(&arrow.matrix, &axis, dsSin(0x1922), dsCos(0x1922));
+        arrow.matrix.m[3][0] = pos.x;
+        arrow.matrix.m[3][1] = pos.y;
+        arrow.matrix.m[3][2] = pos.z + 0x8000;
+        return 2;
+    }
+    MtxFx43 ra;
+    fx32 b = s_arrowAngle[rotation & 3];
+    MTX_RotY43_(&ra, dsSin(b), dsCos(b));
+    VecFx32 dir = {info->initDir[0], info->initDir[1], info->initDir[2]}, up = {0, FX32_ONE, 0};
+    dsVec_MulMtx33(&dir, &ra, &dir);
+    dsMtx43_FromAxes(&arrow.matrix, &pos, &dir, &up);
+    arrow.matrix.m[3][0] += o.x;
+    arrow.matrix.m[3][1] += o.y;
+    arrow.matrix.m[3][2] += o.z;
+    return 2;
+}
+
 dsTrackPiece::~dsTrackPiece()
 {
+    DeletePillars();
     if (collision) {
         dsCollisionWorld::Get()->RemoveShape(collision);
         delete collision;
@@ -158,14 +268,16 @@ dsTrackPiece::~dsTrackPiece()
 // @port ov003:0211fe08 partial (collision part)
 void dsTrackPiece::CreateCollision()
 {
-    if (collision || modelPath.empty())
-        return;
-    std::shared_ptr<dsCollisionMesh> mesh = dsCollisionWorld::Get()->LoadMesh(modelPath);
-    if (!mesh)
-        return;
-    collision = new dsCollisionMeshShape(mesh, 0xffffffff);
-    collision->SetMatrix(matrix);
-    dsCollisionWorld::Get()->AddShape(collision);
+    if (!collision && !modelPath.empty()) {
+        if (std::shared_ptr<dsCollisionMesh> mesh = dsCollisionWorld::Get()->LoadMesh(modelPath)) {
+            collision = new dsCollisionMeshShape(mesh, 0xffffffff);
+            collision->SetMatrix(matrix);
+            dsCollisionWorld::Get()->AddShape(collision);
+        }
+    }
+    for (dsTrackPiece *pl : pillars)
+        if (pl)
+            pl->CreateCollision();
 }
 
 dsTrack::~dsTrack()

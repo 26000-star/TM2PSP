@@ -1,0 +1,45 @@
+# Names recovered in phase 7 (track editor, puzzle mode, custom tracks).
+# Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- track grid (main, singleton *0x020d6628): cells of piece indices, sizes +0x3fc/+0x400/+0x404 ----
+0208da98 dsTrackGrid_ctor               # sizes from dsRaceSetup_GridSize, border +0x414 on Island/Coast, cap +0x418
+0208cf94 dsTrackGrid_InBounds           # a piece's footprint inside the grid (border kept on Island/Coast)
+0208d098 dsTrackGrid_OverlapsLocked     # a locked (puzzle) piece under the footprint
+0208d1d4 dsTrackGrid_FirstOverlap       # the first other piece under the footprint (notch mask, pillar column)
+0208d458 dsTrackGrid_RemovePiece
+0208ce20 dsTrackGrid_CountOfId
+0208cce8 dsTrackGrid_CountStarts        # start or multilap pieces
+0208cca8 dsTrackGrid_CountFinishes      # finish or multilap pieces
+0209e0a8 dsPieceInfo_TurnedNotchMask    # NotchData turned by the rotation, into *0x020d6648
+
+# ---- custom track bit stream (ov003) ----
+ov003:021195c0 dsBitStream_ReadU32      # four bytes, the first is the most significant
+ov003:02119710 dsBitStream_WriteU32
+ov003:02119bec dsTrack_ReadPackedHeader # names, laps, type, environment, time of day, difficulty, date, times
+ov003:0211a7e0 dsTrack_WritePacked
+
+# ---- editor (ov002) ----
+ov002:020ddf98 dsEditor_DropSelected    # the moved block replaces what is under it, refused over locked pieces
+ov002:020e5808 dsEditorValidate_Check   # +0xd0: 1 ok, 2 no start, 3 two starts, 4 no finish, 5 multilap mix
+ov002:020e5178 dsEditorValidate_Messages
+ov002:020e79d0 dsBlockMenu_Load         # screens/<Env>/TrackPieceLayout, puz/<diff>/<n>-Layout
+ov002:020e763c dsBlockMenu_ReadFolder   # one global table of the layout script (TopFolder first)
+ov002:020ebe14 dsEditorBudget_Add       # CostPoly, one unit, CostMem for the first piece of an id
+ov002:020ebe90 dsEditorBudget_IsFull    # poly >= 190 or memory >= 612/630/612/642 (never in puzzle mode)
+ov002:020ebfb4 dsEditorBudget_Remove    # with the undo record and the Snow pillars' share
+ov002:020ec334 dsEditor_AddPiece
+ov002:020e3d68 dsEditorObjectives_Build # ChallengeType, DifficultyType, NumberOfLaps 2..30
+
+# ---- block shop (main, progression object built by 0x020b2934) ----
+020b1b4c dsProgress_LoadBlockShop      # config/BlockShop: per environment { -1, price, locked, name, ViewScale }
+020b21e4 dsProgress_IsBlockLocked      # a block sold in the shop and not bought (cheat flag +0x04 bit 2: never)
+020b22dc dsProgress_BlockShopEntry
+
+# ---- free draw and the test vehicle (ov002) ----
+ov002:020e62cc dsFreeDraw_ctor          # the environment's four road ids (table ov002 0x020eff0c)
+ov002:020e5b48 dsFreeDraw_FitCell       # neighbours' sides (table ov002 0x020ee7a0) -> road block and rotation
+ov002:020e5f58 dsFreeDraw_Step          # previous cell opened towards the new one, new cell fitted
+ov002:020e5a38 dsFreeDraw_SameBlock
+ov002:020e5a1c dsFreeDraw_BeginStroke
+ov002:020df178 dsEditor_TouchUpdate     # stylus moves: camera, block moves, free draw, the test arrow (id -1)
+ov003:0211fbd8 dsTrackPiece_Turn        # a quarter turn (0: +1, else -1) and the model matrices

@@ -21,6 +21,9 @@ public:
     // tokens.dat (0x0207e7bc) then Common and `file` in `language` (0x0207e724 / 0x0207e5a0). False when
     // tokens.dat is missing; missing strings read as "".
     bool Load(int language, int file);
+    // A port addition: one more string file after Load (the port's front end shows the race's pause and results
+    // menus, so it keeps FrontEnd and BackEnd together).
+    bool LoadAlso(int file) { return LoadStrings(file); }
     bool IsLoaded() const { return !m_names.empty(); }
     int Language() const { return m_language; }
 

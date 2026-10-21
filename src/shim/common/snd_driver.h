@@ -30,6 +30,7 @@ bool StartSeq(SndHandle *h, int seq);
 bool StartSeqArc(SndHandle *h, int arc, int index);
 void Stop(SndHandle *h, int fadeFrames);   // 0: at once (the channels still release)
 void StopAll(int fadeFrames);
+void CutChannels(SndHandle *h);            // SND_StopUnlockedChannel on the sequence's channels: no release
 bool IsActive(const SndHandle *h);
 void MoveVolume(SndHandle *h, int target, int frames);   // fader, 0..127
 void SetVolume(SndHandle *h, int volume);                // the handle's own volume, 0..127

@@ -67,6 +67,9 @@ public:
     bool Load(const std::vector<u8> &file);
     // Uses the batch textures for Firebrand batch materials (texturebatch.n of the environment).
     void Draw(const G3Model *batch) const;
+    // One of the two passes (DrawOps): the DS draws every opaque polygon of the frame before any translucent one,
+    // so a scene is drawn with pass 0 for all its models, then pass 1 (without depth writes) for all of them.
+    void Draw(const G3Model *batch, int pass) const;
     // One shape with one material, without node matrix or scale (parts the game places itself: wheels).
     void DrawPart(int material, int shape, const G3Model *batch) const;
     void Upload();                 // creates the back-end textures (host: needs a current GL context)
@@ -112,7 +115,8 @@ public:
     // Draw-time material overrides, as the game's material controllers (created by main 0x0206b0xx for the car's
     // "blight" / "rlight" / "hlight" materials; itcm 0x01fff814 draws the shapes only when the light is on,
     // 0x01fff858 sets the polygon alpha and DIF_AMB = SPE_EMI = the light colour). By material index (this
-    // model's own materials), empty = none. Prepare still converts hidden shapes.
+    // model's own materials, or the batch's for a model with batch materials: the start lights of a track piece),
+    // empty = none. Prepare still converts hidden shapes.
     struct MatOverride {
         bool hidden = false;
         int alpha = -1;            // polygon alpha 1..31, -1 = the material's
@@ -222,6 +226,13 @@ struct G3DrawLight {
 void G3SetDrawLight(const G3DrawLight *l);
 // Frame of the material animations for the next draws (the race advances it once per 30 Hz frame).
 void G3SetTexAnimFrame(int frame);
+// Detail level of the next draws. The PSP splits triangles for the GE's guard band (G3Model::guardEdge) only near
+// the eye: level 1 and 2 keep edges up to G3DetailEdge(level) (8 and 24 units), for pieces at least 2.5 times that
+// far from the eye (RaceSession::Cull). Each level is a separate conversion (Prepare). The host ignores it.
+enum { G3_DETAIL_LEVELS = 3 };
+void G3SetDrawDetail(int level);
+int G3GetDrawDetail();
+float G3DetailEdge(int level); // 0 for level 0 (the model's guardEdge)
 const G3DrawLight *G3GetDrawLight();
 // World normal of a model-space normal under a node matrix (column-major 4x4, null = identity), normalised.
 void G3WorldNormal(const G3DrawLight &l, const float *node, const float *n, float *out);

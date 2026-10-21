@@ -64,7 +64,7 @@ Open the result with `ghidraRun.bat` → File → Open Project → `ghidra/tmtur
 
 | Action | Functions | Bytes | What |
 |---|---|---|---|
-| **port** | 6,193 | 973 KB | Firebrand engine + game: `main()`, main `0x020435CC..0x020B33BC`, ov002 (custom data UI), ov003 (race), ov004 (front end) |
+| **port** | 6,193 | 973 KB | Firebrand engine + game: `main()`, main `0x020435CC..0x020B33BC`, ov002 (track editor, custom data), ov003 (race), ov004 (front end) |
 | replace | 1,601 | 223 KB | NitroSDK 4.2 + NitroSystem → PSP shim; MSL → newlib/libstdc++; zlib 1.2.2 + unzip 0.15 and Lua 5.0.2 → original sources |
 | drop | 2,882 | 312 KB | network stack (CPS/SSL/WiFi/DWC), ov000 WFC utility, ov001/ov006 GameSpy, ov005 Download Play |
 
@@ -222,12 +222,17 @@ folder to the root of a memory stick (custom firmware needed). Real-hardware spe
 
 ## Phase 5: polish on the real PSP and fidelity (in progress)
 
-- **Track menu** in front of the race (both drivers, `src/app/race_app.*`): the 26 Coast tracks with their best
-  time, pause and result menus (continue, restart, next track, track menu), best times in `save.txt` next to the
-  EBOOT. Track reloads are leak-free (`tools/psp/reload_test.ps1`: 32 loads in PPSSPP, constant heap).
+- **Track menu** in front of the race (both drivers, `src/app/race_app.*`): **the 104 race tracks of the four
+  environments** (Stadium, Island, Snow, Coast; left/right picks the environment) with their best time, pause and
+  result menus (continue, restart, next track, track menu), best times in `save.txt` next to the EBOOT. Track
+  reloads are leak-free (`tools/psp/reload_test.ps1 -Count 208`: two rounds of the 104 tracks in PPSSPP). The
+  independent track, terrain, trigger and race-progress checks pass on all 104 tracks (`run_checks.py --env all`).
+- **Platform mode:** the 17 platform tracks (menu section "PLATE-FORME"), retries counted as in the game and shown
+  under the clock, medals from `config/PlatformProgression`. Puzzle mode is not ported yet.
 - **Performance safety for the real PSP:** pieces outside the view frustum are skipped (pixel-identical images,
   `tools/host/check_culling.py`), textures are paletted (T4/T8, lossless) and live in VRAM, vertices are 16-bit
-  (exact DS positions), meshes are converted at load; an empty `perf.txt` next to the EBOOT logs frame times to
+  (exact DS positions), meshes are converted at load, and far pieces are drawn with coarser triangles (three detail
+  levels for the GE's guard band: 3 to 10 times fewer vertices per frame); an empty `perf.txt` logs frame times to
   `frametimes.txt`. Console speed still has to be measured on the PSP-3000 (R overlay or the log).
 - **Fidelity:** the DS lighting found in the code (lights, colour sets from `config/tracks`, material rules,
   shininess table) in common code for both back-ends, the fog, the sky dome of the track's time of day, and the car
@@ -237,7 +242,11 @@ folder to the root of a memory stick (custom firmware needed). Real-hardware spe
   track with set 1, as the game's model flags say. The HUD's text messages ("free wheeling", checkpoints missed)
   with the game's fonts, text layout and localised strings (console language). The sea as the game draws it: 5 x 5
   translucent textured quads in world space with their scrolling texture, lowered as the camera rises (cut into a
-  quadtree around the eye on the PSP for the GE's guard band). Still to do: the sound.
+  quadtree around the eye on the PSP for the GE's guard band).
+- **Sound:** the DS sound driver runs on the CPU (SSEQ sequencer, 16 channels, PCM/ADPCM, 32 kHz) under the game's
+  own sound manager, 3D sources, car audio and audio state: each environment's music, the menu music, the engine,
+  skids, collisions, horn (L), countdown, checkpoints and menu sounds. On the PSP an audio thread plays it on a
+  sceAudio SRC channel; in PPSSPP the rendered sound is identical to the host's sample for sample (`race_shot.ps1`).
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/psp/reload_test.ps1
@@ -245,4 +254,43 @@ powershell -ExecutionPolicy Bypass -File tools/psp/reload_test.ps1
 
 ```bash
 python -P tools/host/check_culling.py
+```
+
+## Phase 6: the front end and ghosts
+
+- The DS menus' content (ov004: titles and buttons from `strings/main`, `Scripts/config` progression and shop tables,
+  the DS fonts and sprites) in a TrackMania Wii style layout for the 16:9 screen: solo modes, environment,
+  difficulty and track choice, time of day, skins, profile, options, shop, pause and results menus
+  (`src/app/fe_menu.cpp`, `fe_canvas.*`).
+- Ghosts in the game's format (`src/game/race/dsGhost.*`): the provided medal opponents, the player's best run
+  recorded and saved next to `save.txt`.
+
+## Phase 7: the track editor and puzzle mode
+
+- **Editor** (ov002 with the editor modes of ov003): the DS's block menus and icons per environment
+  (`Scripts/screens/<Env>/TrackPieceLayout`, `Editor/Cell/<Env>Blocks|Folders`), its placement rules (grid sizes,
+  Island/Coast border, the pieces' notch masks, Snow pillar columns, locked puzzle pieces), its budget (polygons and
+  memory, `MemoryUsage` gauge), the automatic Coast/Island terrain, its validation messages, its objectives
+  (challenge type, difficulty, laps) and its bit-packed track format (`src/game/editor/dsEditorTrack.*`). The PSP has
+  no touch screen: a cursor walks the grid with the d-pad (L/R height, stick = orbit camera, X place/take,
+  square rotate, O delete, triangle block menu, START menu, SELECT help) — `src/app/editor.cpp`.
+- **Test drive** from the cursor, **validation** race (the run's time becomes the author time: gold +2 s, silver
+  +3 s, bronze +5 s), **save / load** to `tracks/<name>.trk` next to `save.txt` (the DS format), **My Tracks** to race
+  the saved validated tracks. Saving a validated track unlocks Puzzle and My Tracks, as on the DS.
+- **Puzzle mode:** the 17 puzzles of `Scenes/puz` with their block stock and `config/PuzzleProgression` medals.
+- **Block shop:** the 147 blocks of `config/BlockShop` are bought with coppers in the shop's Blocks tab and stay
+  greyed out in the editor until then, as on the DS. The editor shows the DS's direction markers (arches, arrows,
+  helper models) on start, finish, checkpoint and multilap blocks.
+- **Free draw and test vehicle:** the DS's free draw (hold X and move the cursor: road blocks fitted to their
+  neighbours, as ov002 does) and the test drive's arrow, moved, raised and turned before the run.
+- **Opponent ghosts:** the race's pause menu has the DS's "Opponents" choice (all, gold, silver, bronze, none).
+- Check: `tm_trackdump --editor` loads all 104 race tracks and 17 puzzles into the editor's model (bounds, overlaps,
+  validation, packed round trip) and every block menu entry.
+
+```bash
+build/host/tm_trackdump.exe --editor
+```
+
+```bash
+build/host/tm_race.exe --editor sta
 ```

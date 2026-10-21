@@ -74,6 +74,11 @@ public:
     std::vector<dsHudSprite> sprites; // every sprite, in drawing order; draw the visible ones
     std::vector<fx32> splits;         // this run's checkpoint / lap times in passing order (for the record)
     std::string message;              // port: the message shown, "" when none (for the drivers' logs)
+    // Port: in platform mode (race mode 8) the bottom screen's retry counter (+0x32c, 0x0210b53c: "Retries" and
+    // the count, "%d") is drawn under the clock, right-aligned, in the messages' font and palettes. SetRetries(-1)
+    // hides it.
+    void SetRetries(int retries);
+    std::vector<dsHudSprite> retrySprites;
 
 private:
     struct SplitLine {     // 0x0210c1ec: 9 sprites
@@ -114,4 +119,5 @@ private:
     size_t m_msgFirst = 0;
     int m_msgTimer = 0;      // +0x40
     bool m_freeWheel = false; // HUD +0x68: the free-wheel message was shown
+    int m_retries = -1;
 };

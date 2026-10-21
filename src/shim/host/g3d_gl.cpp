@@ -88,6 +88,15 @@ void G3Model::DrawPart(int material, int shape, const G3Model *batch) const
     DrawOps({{1, material}, {2, shape}}, batch);
 }
 
+void G3Model::Draw(const G3Model *batch, int pass) const
+{
+    if (pass)
+        glDepthMask(GL_FALSE);
+    DrawPass(ops, batch, pass);
+    if (pass)
+        glDepthMask(GL_TRUE);
+}
+
 void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
 {
     DrawPass(ops, batch, 0);
@@ -152,8 +161,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                         else
                             glDisable(GL_FOG);
                     }
-                    if (src == this)
-                        hidden = !ApplyOverride(o.a, light ? &lit : nullptr, dif, a);
+                    hidden = !ApplyOverride(o.a, light ? &lit : nullptr, dif, a);
                     alpha = a == 0 ? 1.0f : a / 31.0f;
                 }
             }

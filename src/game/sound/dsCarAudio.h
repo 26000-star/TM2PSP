@@ -49,6 +49,9 @@ public:
     bool Init(const std::string &car, const dsCarParams &params);
     void Reset();                   // 0x020f8700: every source released
     void PlayerReset() { m_byte0c = 0; } // 0x020f7e64 (from the player's reset)
+    // 0x020f7e6c (restart, respawn): the engine, skid and collision sources released (not the horn), full master
+    // volume, the car entry cleared.
+    void RaceReset();
     // 0x020f7f58, once per frame: the listener (camera matrix), the master fade, the engine of `car`, the
     // positions of the skid / collision / horn sources.
     void Update(const MtxFx43 &camera, const dsCarDynamics &car);
@@ -77,7 +80,11 @@ private:
     void PlaceSource(Source &s);
 
     int m_master = 0x7f, m_target = 0x7f, m_step = 0;  // +0x00, +0x04, +0x08
-    u8 m_byte0c = 0;                                   // +0x0c
+    u8 m_byte0c = 0;                                   // +0x0c: 0 = the car's own engine (the human player)
+    // The player's car entity: the engine's gear (+0xc0) and its rpm eased by the player's update (+0xbc, fx32),
+    // which SoundRpm reads while byte +0x0c is clear.
+    s32 m_engineGear = 0;
+    fx32 m_engineRpm = 0;
     VecFx32 m_listenerPos = {};                        // +0x10
     CarEntry m_player;                                 // +0x28 (the last car entry)
     Source m_engine[3];                                // +0x2c: CAR_IDLE, CAR_LOW, CAR_MED

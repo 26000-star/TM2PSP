@@ -1,9 +1,10 @@
-"""Checks `tm_trackdump --terrain` (dsTrack::BuildTerrain, ov003 0x02100998) for Coast tracks.
+"""Checks `tm_trackdump --terrain` (dsTrack::BuildTerrain, ov003 0x02100998) for Coast and Island tracks.
 
 Independent pieces: the scene and the piece catalogue come from the unluac decompilations (check_track.py), the
 neighbourhood patterns, quarter-turn tables and terrain piece names are read from the ROM's ov003 data
 (0x02134e8c, 0x02134e68, 0x02135bcc), and the selection is re-implemented here from the disassembly.
-Usage: python -P tools/host/check_terrain.py <dump> [--track easy/0]
+Usage: python -P tools/host/check_terrain.py <dump> [--env coa|isl] [--track easy/0]
+Stadium and Snow have no terrain: their dump must hold none.
 """
 import os
 import sys
@@ -14,26 +15,38 @@ sys.path.insert(0, os.path.join(HERE, "..", "analysis"))
 import check_track  # noqa: E402
 import romimage  # noqa: E402
 
-COA = 3
-GROUND_LEVEL, GRID, CELL = 3, (22, 20, 22), 16
+GRID = (22, 20, 22)
 
 
-def rom_tables():
+def rom_tables(env):
     mods = romimage.load()
     m = [x for x in (mods.values() if isinstance(mods, dict) else mods) if x.name == "ov003"][0]
     b = lambda a, n: bytes(m.data[a - m.base:a - m.base + n])
     pats = [list(b(0x02134E8C + 9 * i, 9)) for i in range(15)]
     turns = [list(b(0x02134E68 + 9 * i, 9)) for i in range(4)]
-    names = [m.cstring(m.u32(0x02135BCC + COA * 0x18 + 4 * i)) for i in range(6)]
+    names = [m.cstring(m.u32(0x02135BCC + env * 0x18 + 4 * i)) for i in range(6)]
     return pats, turns, names
 
 
 def main():
     args = sys.argv[1:]
     dump = args.pop(0)
-    track = args.pop(1) if len(args) > 1 and args[0] == "--track" else "easy/0"
-    pats, turns, names = rom_tables()
-    cat = {p["id"]: p for p in check_track.expected_pieces(COA)}
+    env_name, track = "coa", "easy/0"
+    while args:
+        a = args.pop(0)
+        if a == "--env":
+            env_name = args.pop(0)
+        elif a == "--track":
+            track = args.pop(0)
+    env = check_track.ENVS.index(env_name)
+    if env not in (1, 3):   # dsTrack: terrain only on Island and Coast
+        got = [line for line in open(dump) if line.startswith("terrainpiece")]
+        print("%s/%s: %d terrain pieces, %d errors" % (env_name, track, len(got), len(got)))
+        return 1 if got else 0
+    GROUND_LEVEL = 3 if env == 3 else 0
+    CELL = 16 if env == 3 else 64
+    pats, turns, names = rom_tables(env)
+    cat = {p["id"]: p for p in check_track.expected_pieces(env)}
     by_name = {p["name"]: p for p in cat.values()}
     ids = [by_name[n]["id"] for n in names]
     base_rot = [0, 0, 3, 0, 0, 0]
@@ -109,7 +122,7 @@ def main():
         for g in sorted(set(got) - set(exp)):
             print("ERROR extra", g)
             errors += 1
-    print("%s: %d terrain pieces, %d errors" % (track, len(got), errors))
+    print("%s/%s: %d terrain pieces, %d errors" % (env_name, track, len(got), errors))
     return 1 if errors else 0
 
 

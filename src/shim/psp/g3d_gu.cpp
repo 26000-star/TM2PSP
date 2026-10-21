@@ -43,12 +43,13 @@ struct GuVertex {
 };
 
 // Drawn vertex, 16 bytes: the DS positions are 4.12 fixed point within +-8 (VTX_16; VTX_10 and VTX_XY/XZ/YZ are
-// coarser), so x 4096 they fit an s16 exactly, and the texture coordinates are the DS s16 values (1/16 texel). The
-// GE reads 16-bit values as s16 / 32768 in 3D mode: the model matrix is scaled by 8 and the texture scale is
+// coarser), so x 4096 they fit an s16 exactly, and the texture coordinates are the DS values (1/16 texel), moved
+// into the GE's unsigned range (RebaseTexCoords). The GE reads 16-bit positions as s16 / 32768 and texture
+// coordinates as u16 / 32768 in 3D mode: the model matrix is scaled by 8 and the texture scale is
 // 32768 / (16 x texture size) at draw time. Midpoints of split triangles round to the nearest 1/4096 unit and
-// 1/16 texel, the same way on both sides of a shared edge.
+// 1/16 texel, the same way on both sides of a shared edge (up to whole texture repeats).
 struct GuVertex16 {
-    s16 u, v;
+    u16 u, v;
     u32 color;
     s16 x, y, z, pad;
 };
@@ -66,6 +67,7 @@ struct GuMesh {
 };
 
 int g_clampedVertices;
+int g_drawnVertices; // mesh vertices sent to the GE since the last G3GuTakeDrawnVertices
 bool g_prepareOnly; // DrawOps converts without drawing (Prepare) // positions or texture coordinates outside the s16 range (clamped; expected 0)
 
 s16 ToS16(float f)
@@ -76,6 +78,51 @@ s16 ToS16(float f)
         r = r > 0 ? 32767 : -32768;
     }
     return (s16)r;
+}
+
+u16 ToU16(float f)
+{
+    long r = lrintf(f);
+    if (r > 65535 || r < 0) {
+        g_clampedVertices++;
+        r = r > 0 ? 65535 : 0;
+    }
+    return (u16)r;
+}
+
+// The GE reads 16-bit texture coordinates as unsigned (u / 32768): a negative DS coordinate becomes a large
+// positive one, and a triangle spanning 0 is interpolated the long way round, across thousands of texels (textures
+// flashing in other colours on the console; PPSSPP's GPU back-ends read them signed, its software renderer shows
+// it). On a repeating axis a whole number of texture repeats changes no texel, so each primitive is moved by such a
+// multiple until its lowest coordinate is in [0, period); on a clamped axis negative coordinates become 0.
+// Period of one repeat in DS coordinates (1/16 texel) for an uploaded texture `size` texels wide (mirrored: twice the
+// DS size) under a texture SRT scale: the smallest multiple that is a whole number of DS units (0: none found).
+float TexPeriod(float size, float srtScale)
+{
+    if (srtScale <= 0)
+        return 0;
+    for (int k = 1; k <= 16; k++) {
+        float p = k * 16.0f * size / srtScale;
+        if (fabsf(p - roundf(p)) < 1e-3f)
+            return roundf(p);
+    }
+    return 0;
+}
+
+// Moves the coordinates of one primitive (n values `stride` floats apart) by whole periods (period 0: clamped axis).
+void RebaseTexCoords(float *c, int stride, int n, float period)
+{
+    float lo = c[0];
+    for (int i = 1; i < n; i++)
+        lo = fminf(lo, c[i * stride]);
+    if (period > 0) {
+        float shift = floorf(lo / period) * period;
+        for (int i = 0; i < n; i++)
+            c[i * stride] -= shift;
+    } else if (lo < 0) {
+        for (int i = 0; i < n; i++)
+            c[i * stride] = fmaxf(c[i * stride], 0.0f);
+    }
 }
 
 struct GuModelData {
@@ -239,10 +286,13 @@ GuTex *MakeTexture(const G3Texture &t)
     return g;
 }
 
+// Console diagnosis (G3GuSetDebug): bit 0 no face culling, bit 1 no fog, bit 2 no texture.
+unsigned g_guDebug;
+
 // Selects a back-end texture (none: texturing off).
 void BindTexture(const G3Texture *tex)
 {
-    if (!tex || !tex->gu) {
+    if (!tex || !tex->gu || (g_guDebug & 4)) {
         sceGuDisable(GU_TEXTURE_2D);
         return;
     }
@@ -398,6 +448,14 @@ struct GuSink : G3ShapeSink {
 
 G3Model::~G3Model()
 {
+    // The GE may still be drawing the last list (the race builds the next one while it runs) from these textures
+    // and vertices. Only a model the GE has data of waits: one never uploaded may go inside an open list (the HUD
+    // backing's, read on the CPU), where waiting would never end.
+    bool onGe = backend != nullptr;
+    for (const G3Texture &t : textures)
+        onGe |= t.gu != nullptr;
+    if (onGe)
+        sceGuSync(0, 0);
     for (G3Texture &t : textures)
         if (t.gu) {
             GuTex *g = (GuTex *)t.gu;
@@ -436,6 +494,15 @@ void G3Model::Draw(const G3Model *batch) const
 void G3Model::DrawPart(int material, int shape, const G3Model *batch) const
 {
     DrawOps({{1, material}, {2, shape}}, batch);
+}
+
+void G3Model::Draw(const G3Model *batch, int pass) const
+{
+    if (pass && !g_prepareOnly)
+        sceGuDepthMask(GU_TRUE);
+    DrawPass(ops, batch, pass);
+    if (pass && !g_prepareOnly)
+        sceGuDepthMask(GU_FALSE);
 }
 
 void G3Model::DrawOps(const std::vector<Op> &ops, const G3Model *batch) const
@@ -506,7 +573,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                 // opaque, 1..30 translucent, as on the host.
                 bool back = (m.polyAttr >> 6) & 1, front = (m.polyAttr >> 7) & 1;
                 if (!draw) {
-                } else if (back && front) {
+                } else if ((back && front) || (g_guDebug & 1)) {
                     sceGuDisable(GU_CULL_FACE);
                 } else {
                     sceGuEnable(GU_CULL_FACE);
@@ -522,14 +589,14 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                     if (lit.alpha >= 0)
                         a = (u32)lit.alpha;
                     if (draw) {
-                        if (light->env->fog && lit.fog)
+                        if (light->env->fog && lit.fog && !(g_guDebug & 2))
                             sceGuEnable(GU_FOG);
                         else
                             sceGuDisable(GU_FOG);
                     }
                 }
                 // Hidden shapes are still converted by Prepare (the brake lights come on during the race).
-                if (src == this && !ApplyOverride(o.a, light ? &lit : nullptr, dif, a) && draw)
+                if (!ApplyOverride(o.a, light ? &lit : nullptr, dif, a) && draw)
                     skip = true;
                 alpha = a == 0 ? 1.0f : a / 31.0f;
             } else {
@@ -546,12 +613,14 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
             // is converted at every draw into the display list's memory.
             bool dynamic = light && light->variant < 0;
             int variant = light ? light->variant + 1 : 0;
+            int detail = G3GetDrawDetail();
             u64 key = (u64)(uintptr_t)src << 32 ^ (u64)(u32)(mat & 0xffff) << 16 ^ (u64)(u32)o.a ^
-                      (u64)(u32)(variant & 0xff) << 56 ^ (u64)(u32)(nodeIndex & 0xff) << 48;
+                      (u64)(u32)(variant & 0xff) << 56 ^ (u64)(u32)(nodeIndex & 0xff) << 48 ^ (u64)(detail & 3) << 60;
             auto it = data->meshes.find(key);
             if (it == data->meshes.end()) {
                 GuSink sink(dif, alpha);
-                sink.maxEdge = guardEdge / scale;
+                float edge = G3DetailEdge(detail);
+                sink.maxEdge = (edge > guardEdge ? edge : guardEdge) / scale;
                 if (light) {
                     sink.light = light;
                     sink.lit = &lit;
@@ -568,9 +637,16 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                 if (m.count) {
                     size_t bytes = sizeof(GuVertex16) * m.count;
                     m.v = (GuVertex16 *)memalign(16, bytes);
+                    if (m.su) {
+                        float pu = TexPeriod(tex->w / g->su, srt.scale[0]), pv = TexPeriod(tex->h / g->sv, srt.scale[1]);
+                        for (int k = 0; k + 2 < m.count; k += 3) {
+                            RebaseTexCoords(&sink.out[k].u, sizeof(GuVertex) / sizeof(float), 3, tex->repeatS ? pu : 0);
+                            RebaseTexCoords(&sink.out[k].v, sizeof(GuVertex) / sizeof(float), 3, tex->repeatT ? pv : 0);
+                        }
+                    }
                     for (int k = 0; k < m.count; k++) {
                         const GuVertex &a = sink.out[k];
-                        m.v[k] = {ToS16(a.u), ToS16(a.v), a.color, ToS16(a.x * 4096), ToS16(a.y * 4096),
+                        m.v[k] = {ToU16(a.u), ToU16(a.v), a.color, ToS16(a.x * 4096), ToS16(a.y * 4096),
                                   ToS16(a.z * 4096), 0};
                     }
                     if (dynamic) {
@@ -610,9 +686,10 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                     G3WorldNormal(*light, nullptr, &mesh.normals[i * 3], w);
                     rgb[i] = GuSink::Color8888(G3LightVertex(lit, *light->env, w, light->eye, light->specular), 0);
                 }
+                // The alpha of this draw too (a material override may change it: the ghost cars).
+                u32 a8 = (u32)(alpha * 255.0f + 0.5f) << 24; // as GuSink::Color8888
                 for (int k = 0; k < mesh.count; k++)
-                    if (mesh.normalOf[k] >= 0)
-                        v[k].color = rgb[mesh.normalOf[k]] | (v[k].color & 0xff000000);
+                    v[k].color = (mesh.normalOf[k] >= 0 ? rgb[mesh.normalOf[k]] : v[k].color & 0xffffff) | a8;
                 drawV = v;
             }
             if (mesh.count && draw) {
@@ -624,6 +701,7 @@ void G3Model::DrawPass(const std::vector<Op> &ops, const G3Model *batch, int pas
                     sceGuTexOffset(-srt.trans[0] * g->su, -srt.trans[1] * g->sv);
                 }
                 sceGumDrawArray(GU_TRIANGLES, GU_VTYPE, mesh.count, nullptr, drawV);
+                g_drawnVertices += mesh.count;
             }
             break;
         }
@@ -658,8 +736,15 @@ void G3Model::Prepare(const G3Model *batch) const
 }
 
 size_t G3GuTextureBytes() { return g_textureBytes; }
+void G3GuSetDebug(unsigned flags) { g_guDebug = flags; }
 size_t G3GuVramBytes() { return g_vramBytes; }
 int G3GuClampedVertices() { return g_clampedVertices; }
+int G3GuTakeDrawnVertices()
+{
+    int n = g_drawnVertices;
+    g_drawnVertices = 0;
+    return n;
+}
 void G3GuSetVram(void *base, size_t size)
 {
     g_vramBase = g_vramTop = (u8 *)base;
@@ -669,9 +754,10 @@ size_t G3GuMeshBytes() { return g_meshBytes; }
 
 namespace {
 
-// DrawQuads vertex, 16 bytes: raw DS texture coordinates (scaled by sceGuTexScale as the meshes'), world position.
+// DrawQuads vertex, 16 bytes: DS texture coordinates moved into the unsigned range per cell (RebaseTexCoords; scaled
+// by sceGuTexScale as the meshes'), world position.
 struct GuQuadVertex {
-    s16 u, v;
+    u16 u, v;
     float x, y, z;
 };
 const int GU_QUAD_VTYPE = GU_TEXTURE_16BIT | GU_VERTEX_32BITF | GU_TRANSFORM_3D;
@@ -692,6 +778,7 @@ struct QuadSplitter {
     };
     ScePspFMatrix4 clip;           // projection x view x model
     float eye[3], minSize;
+    float period[2] = {0, 0};      // texture repeat in DS units per axis (0: clamped or untextured)
     GuQuadVertex *out;
     int count, capacity;
     void Clip(V &v) const
@@ -717,7 +804,7 @@ struct QuadSplitter {
             m.c[k] = (a.c[k] + b.c[k]) * 0.5f;
         Code(m);
     }
-    static s16 Round(float f) { return (s16)(int)(f < 0 ? f - 0.5f : f + 0.5f); }
+    static u16 Round(float f) { return (u16)(int)(f + 0.5f); }
     // h: half extents of the cell's bounds (a parallelogram's: half the sum of its edges' absolute components).
     void Cell(const V &c0, const V &c1, const V &c2, const V &c3, const float *h, int depth)
     {
@@ -745,11 +832,15 @@ struct QuadSplitter {
         }
         if (count + 6 > capacity)
             return;
-        // The texture coordinates are averages of s16 values: in range, rounded to the nearest.
-        GuQuadVertex q[4] = {{Round(c0.s), Round(c0.t), c0.p[0], c0.p[1], c0.p[2]},
-                             {Round(c1.s), Round(c1.t), c1.p[0], c1.p[1], c1.p[2]},
-                             {Round(c2.s), Round(c2.t), c2.p[0], c2.p[1], c2.p[2]},
-                             {Round(c3.s), Round(c3.t), c3.p[0], c3.p[1], c3.p[2]}};
+        // The texture coordinates are averages of s16 values, moved by whole repeats into [0, 65535], rounded to the
+        // nearest.
+        float st[4][2] = {{c0.s, c0.t}, {c1.s, c1.t}, {c2.s, c2.t}, {c3.s, c3.t}};
+        RebaseTexCoords(&st[0][0], 2, 4, period[0]);
+        RebaseTexCoords(&st[0][1], 2, 4, period[1]);
+        GuQuadVertex q[4] = {{Round(st[0][0]), Round(st[0][1]), c0.p[0], c0.p[1], c0.p[2]},
+                             {Round(st[1][0]), Round(st[1][1]), c1.p[0], c1.p[1], c1.p[2]},
+                             {Round(st[2][0]), Round(st[2][1]), c2.p[0], c2.p[1], c2.p[2]},
+                             {Round(st[3][0]), Round(st[3][1]), c3.p[0], c3.p[1], c3.p[2]}};
         GuQuadVertex *o = out + count;
         o[0] = q[0];
         o[1] = q[1];
@@ -795,6 +886,11 @@ void G3Model::DrawQuads(int texture, const G3QuadVertex *v, int quads, u16 rgb55
     for (int k = 0; k < 3; k++)
         sp.eye[k] = eye[k];
     sp.minSize = guardEdge;
+    if (tex && tex->gu) {
+        const GuTex *g = (const GuTex *)tex->gu;
+        sp.period[0] = tex->repeatS ? TexPeriod(tex->w / g->su, 1) : 0;
+        sp.period[1] = tex->repeatT ? TexPeriod(tex->h / g->sv, 1) : 0;
+    }
     sp.out = g_quadBuffer;
     sp.count = 0;
     sp.capacity = QUAD_MAX_VERTICES;

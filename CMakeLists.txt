@@ -30,6 +30,7 @@ add_library(tm_shim STATIC
   src/shim/common/fx.c
   src/shim/common/snd_sdat.cpp
   src/shim/common/snd_driver.cpp
+  src/shim/common/snd_stream.cpp
   src/shim/${TM_PLATFORM}/fs_${TM_PLATFORM}.c
   src/shim/${TM_PLATFORM}/os_${TM_PLATFORM}.c)
 target_include_directories(tm_shim PUBLIC src/shim/include src/shim/common)
@@ -37,7 +38,7 @@ if(NOT WIN32)
   target_link_libraries(tm_shim PUBLIC m)
 endif()
 if(TM_PLATFORM STREQUAL psp)
-  target_link_libraries(tm_shim PUBLIC pspdebug pspdisplay pspge pspctrl psprtc)
+  target_link_libraries(tm_shim PUBLIC pspdebug pspdisplay pspge pspctrl psprtc pspaudio)
 endif()
 
 add_library(tm_unzip STATIC src/lib/unzip/unzip.c)
@@ -64,13 +65,13 @@ if(TM_PLATFORM STREQUAL psp)
                   OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/tm_checks_pbp)
 
   # The race (src/psp/race_psp.cpp): G3D stand-in on sceGu, sceCtrl input.
-  add_executable(tm_race src/psp/race_psp.cpp src/app/race_session.cpp src/app/race_app.cpp
+  add_executable(tm_race src/psp/race_psp.cpp src/app/race_session.cpp src/app/race_app.cpp src/app/fe_canvas.cpp src/app/fe_menu.cpp src/app/editor.cpp
                  src/shim/common/g3d_model.cpp src/shim/common/g2d_cells.cpp
                  src/shim/psp/g3d_gu.cpp)
   target_include_directories(tm_race PRIVATE src/app src/shim/common)
   # newlib's int32_t is long on the Allegrex (same 32 bits as int): %d on s32/fx32 is harmless there.
   target_compile_options(tm_race PRIVATE -Wall -Wno-unused-parameter -Wno-format)
-  target_link_libraries(tm_race PRIVATE tm_game pspgum pspgu pspdmac psputility)
+  target_link_libraries(tm_race PRIVATE tm_game pspgum pspgu pspdmac psputility psppower)
   create_pbp_file(TARGET tm_race TITLE "TM2PSP - TrackMania Coast" MEMSIZE 1
                   OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/tm_race_pbp)
 endif()
@@ -107,7 +108,7 @@ if(TM_PLATFORM STREQUAL host)
     add_library(tm_g3d STATIC src/shim/common/g3d_model.cpp src/shim/common/g2d_cells.cpp src/shim/host/g3d_gl.cpp)
     target_include_directories(tm_g3d PUBLIC src/shim/common src/shim/host)
     target_link_libraries(tm_g3d PUBLIC tm_shim OpenGL::GL)
-    add_executable(tm_race src/host/race.cpp src/app/race_session.cpp src/app/race_app.cpp)
+    add_executable(tm_race src/host/race.cpp src/app/race_session.cpp src/app/race_app.cpp src/app/fe_canvas.cpp src/app/fe_menu.cpp src/app/editor.cpp)
     target_include_directories(tm_race PRIVATE src/app)
     target_link_libraries(tm_race PRIVATE tm_game tm_g3d SDL2::SDL2main SDL2::SDL2-static)
     if(WIN32)

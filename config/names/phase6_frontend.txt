@@ -1,0 +1,15 @@
+# Names recovered in phase 6 (front end).
+# Applied with: python -P tools/analysis/apply_names.py config/names/*.txt
+
+# ---- challenge select screen: medal times from the provided ghosts ----
+ov004:020fa3ec feGhost_ReadMedalTime
+ov004:020fa49c feChallengeSelect_FillTimes
+020a9678 dsProfile_ChallengeRecord
+
+# ---- ghosts (dsGhost) ----
+02095ad8 dsGhost_Load
+02095c5c dsGhost_DecodeRecord
+02095f70 dsGhost_Advance
+02096b0c dsGhost_Start
+02094c6c dsGhostList_Add
+ov003:0210e6a0 dsRaceGhosts_LoadOpponent

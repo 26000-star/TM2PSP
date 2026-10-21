@@ -34,8 +34,16 @@ public:
 
     void SetPosition(const VecFx32 &pos);              // ov003 0x0211fe08 (partial: cells + model choice)
     void UpdateTransform();                            // ov003 0x0211f088 + the rotation of 0x0211f2f0
+    // The editor's direction markers of a start, finish, checkpoint or multilap piece (models the DS creates only
+    // in the editor modes, flag *0x021378dc): the piece's Helper model (Misc/helpers/<env>/<Helper>, Island, Snow,
+    // Coast), or Stadium's arch and arrow (Tracks/sta/Arch<type>, Arrow<type>). Returns how many (0 to 2).
+    struct Marker {
+        std::string model;
+        MtxFx43 matrix;
+    };
+    int EditorMarkers(Marker out[2]) const;         // ov003 0x0211eac0 + 0x0211e74c (placement only)
     // Loads graphics/<modelPath>.h as a mesh shape placed with the piece matrix and adds it to the collision world
-    // (the shape creation of ov003 0x0211fe08: world vtable +0x14 then shape vtable +0x08).
+    // (the shape creation of ov003 0x0211fe08: world vtable +0x14 then shape vtable +0x08), then the pillars'.
     void CreateCollision();
 
     s32 id;                     // +0x04 piece id (-1 = test arrow)
@@ -50,7 +58,15 @@ public:
     std::string modelPath;      // +0x0c "Tracks/<env>/<model name>" (collision: graphics/<path>.h)
     MtxFx43 matrix;             // model +0x20: rotation, and translation = pos moved to the footprint corner
     class dsCollisionMeshShape *collision = nullptr; // +0x7c
+    // Snow: the pillar pieces under a piece above the ground level, one per set bit of its cell height
+    // (<name>pillar1/2/4/8 stacked from the ground). Owned; not in the track's piece list.
+    dsTrackPiece *pillars[4] = {}; // +0x94
     ~dsTrackPiece();
+
+private:
+    void UpdatePillars(const VecFx32 &oldPos, bool force); // ov003 0x0211ef00
+    void CreatePillars();                                  // ov003 0x0211ee60
+    void DeletePillars();
 };
 
 class dsTerrainFilter;

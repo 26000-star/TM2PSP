@@ -139,22 +139,29 @@ bool G2CellBank::Load(const std::vector<u8> &ncgr, const std::vector<u8> &ncer, 
     int maxW = 0;
     for (const G2Cell &c : cells)
         maxW = std::max(maxW, (int)c.w + 2);
+    // Wider when the atlas would pass 512 rows: the PSP's GE takes textures of 512 x 512 at most (the editor's
+    // block icons: about 190 cells of 32 x 32).
     width = std::max(Pow2(maxW), 256);
-    int x = 0, y = 0, rowH = 0;
-    for (G2Cell &c : cells) {
-        if (!c.w)
-            continue;
-        if (x + c.w + 2 > width) {
-            x = 0;
-            y += rowH;
-            rowH = 0;
+    for (;;) {
+        int x = 0, y = 0, rowH = 0;
+        for (G2Cell &c : cells) {
+            if (!c.w)
+                continue;
+            if (x + c.w + 2 > width) {
+                x = 0;
+                y += rowH;
+                rowH = 0;
+            }
+            c.u = (u16)(x + 1);
+            c.v = (u16)(y + 1);
+            x += c.w + 2;
+            rowH = std::max(rowH, (int)c.h + 2);
         }
-        c.u = (u16)(x + 1);
-        c.v = (u16)(y + 1);
-        x += c.w + 2;
-        rowH = std::max(rowH, (int)c.h + 2);
+        height = Pow2(y + rowH);
+        if (height <= 512 || width >= 512)
+            break;
+        width *= 2;
     }
-    height = Pow2(y + rowH);
     pixels.assign((size_t)width * height, 0);
 
     for (int i = 0; i < nCells; i++) {

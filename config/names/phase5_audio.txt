@@ -48,3 +48,58 @@
 0205d31c dsSoundManager_AllocSlot
 0205d4c0 dsSoundManager_ApplyVolume
 0205df58 dsSoundManager_AddSeqArc
+
+# ---- 3D sound sources (*0x020c8e8c, vtable 0x020bd6f0; handles 3 << 29 | slot << 21 | serial) ----
+0205fe40 dsSound3D_SetListener
+0205fa38 dsSound3D_IsValid
+0205fc9c dsSound3D_Create
+0205fc54 dsSound3D_CreateAt
+0205f994 dsSound3D_Release
+0205f870 dsSound3D_ReleaseAll
+0205fab8 dsSound3D_SetPosition
+0205fa88 dsSound3D_SetPositionAt
+0205f944 dsSound3D_SetVolume
+0205f914 dsSound3D_SetPitch
+02060118 dsSound3D_Compute
+0205ffb4 dsSound3D_StartStop
+0206032c dsSound3D_Update
+0206054c dsSound3D_SortByVolume
+
+# ---- car audio of the race (*0x02137740, 0x320 bytes) ----
+ov003:020f92cc dsCarAudio_ctor
+ov003:020f9268 dsCarAudio_dtor
+ov003:020f89ac dsCarAudio_Init
+ov003:020f8c90 dsCarAudio_LoadConfig
+ov003:020f8c28 dsCarAudio_InitSource
+ov003:020f93e0 dsCarAudio_ConvRpm
+ov003:020f8700 dsCarAudio_Reset
+ov003:020f7e6c dsCarAudio_RaceReset
+ov003:020f7e64 dsCarAudio_SetByte0c
+ov003:020f6a30 dsCarAudio_ReleaseSources
+ov003:020f7000 dsCarAudio_StartSource
+ov003:020f7f58 dsCarAudio_Update
+ov003:020f799c dsCarAudio_SoundRpm
+ov003:020f75cc dsCarAudio_Engine
+ov003:020f7b4c dsCarAudio_Skid
+ov003:020f6e38 dsCarAudio_Collision
+ov003:020f6dc8 dsCarAudio_Horn
+ov003:020f6d70 dsCarAudio_FadeOut
+ov003:020f6da0 dsCarAudio_FadeIn
+
+# ---- the game's audio state (0x30 bytes; string tables of SEQARC names and sound names) ----
+0208c8ec dsGameAudio_ctor
+0208c04c dsGameAudio_StartRace
+0208bf50 dsGameAudio_EndRace
+0208c4b8 dsGameAudio_StartFrontEnd
+0208c3cc dsGameAudio_StartEditor
+0208bd74 dsGameAudio_PlayMusic
+0208bd5c dsGameAudio_PlaySe
+0208c5ec dsGameAudio_FadeIn
+0208c588 dsGameAudio_FadeOut
+0208c674 dsGameAudio_FadeOutAll
+0208c730 dsGameAudio_Update
+0208bf24 dsGameAudio_SetMusicOn
+0208bf18 dsGameAudio_SetAmbienceOn
+0208bea0 dsGameAudio_SetSoundOn
+0208ab50 dsSeqArcNames_ctor
+0208c9d4 dsSoundNames_ctor

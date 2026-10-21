@@ -14,6 +14,8 @@
 #include "fs/dsFileSystem.h"
 #include "math/dsMath.h"
 #include "nitro.h"
+#include "sound/dsCarAudio.h"
+#include "sound/dsGameAudio.h"
 #include "track/dsPieceData.h"
 #include "track/dsRaceSetup.h"
 #include "track/dsTrackLighting.h"
@@ -130,6 +132,18 @@ const G3DrawLight *RaceSession::PieceLight(size_t k, G3DrawLight *out) const
     return out;
 }
 
+const G3DrawLight *RaceSession::SceneryLight(size_t i, G3DrawLight *out) const
+{
+    if (!lighting)
+        return nullptr;
+    *out = G3DrawLight();
+    out->env = &lightEnv;
+    out->set = 1; // misc model (main 0x02055970)
+    RotationOf(scenery[i].matrix, out->rot);
+    out->variant = scenery[i].variant;
+    return out;
+}
+
 const G3DrawLight *RaceSession::CarLight(G3DrawLight *out) const
 {
     if (!lighting)
@@ -151,20 +165,81 @@ const G3DrawLight *RaceSession::CarLight(G3DrawLight *out) const
 int RaceSession::CarDraws(Draw *out) const
 {
     int n = 0;
-    auto add = [&](const G3Model *m, const MtxFx43 &mtx) {
+    auto add = [&](const G3Model *m, const MtxFx43 &mtx, bool ghost = false) {
         if (!m)
             return;
         Draw &d = out[n++];
         d.model = m;
+        d.ghost = ghost;
         RaceMatrix(mtx, d.matrix);
         d.lit = CarLight(&d.light) != nullptr;
         if (d.lit)
             RotationOf(mtx, d.light.rot);
     };
-    add(carModel, car->matrix);
-    for (int i = 0; i < 4; i++)
-        add(wheelModels[i == 0 || i == 2 ? 0 : 1], car->wheelMatrix[i]);
+    if (car) {
+        add(carModel, car->matrix);
+        for (int i = 0; i < 4; i++)
+            add(wheelModels[i == 0 || i == 2 ? 0 : 1], car->wheelMatrix[i]);
+        // Ghosts: the body only, at their recorded matrix for the race clock's tick, until the end of their run.
+        int tick = (int)(((s64)progress->clock * dsGhost::TICKS_PER_SECOND) >> FX32_SHIFT);
+        for (size_t g = 0; g < ghosts.size() && g < MAX_GHOSTS; g++) {
+            MtxFx43 m;
+            if (tick < ghosts[g]->Ticks() && ghosts[g]->Matrix(tick, &m))
+                add(carModel, m, true);
+        }
+    }
+    for (size_t i = 0; i < editorDraws.size() && n < MAX_CAR_DRAWS; i++)
+        out[n++] = editorDraws[i];
     return n;
+}
+
+// A ghost's look: every material of the body at polygon alpha 12 (the light shapes stay as they are), so that the
+// DS's translucent pass draws it. The car's own overrides are put back after the ghost draws.
+// The editor's block under the cursor (ghost 2, or 3 where it cannot go) gets the same alpha on every material of
+// its model (the batch's for piece models), tinted red when it cannot be placed.
+void RaceSession::GhostLook(const Draw &d, bool on)
+{
+    G3Model *model = d.ghost == 1 ? carModel : const_cast<G3Model *>(d.model);
+    if (!model)
+        return;
+    if (!on) {
+        model->overrides = savedOverrides;
+        return;
+    }
+    savedOverrides = model->overrides;
+    size_t count = model->batchMaterials && batch ? batch->materials.size() : model->materials.size();
+    model->overrides.resize(count);
+    for (size_t m = 0; m < model->overrides.size(); m++) {
+        bool light = false;
+        if (d.ghost == 1)
+            for (int l : carLightMaterial)
+                light |= l == (int)m;
+        if (light) {
+            model->overrides[m].hidden = true;
+            continue;
+        }
+        model->overrides[m].alpha = d.ghost == 1 ? 12 : d.ghost == 4 ? 20 : 16;
+        if (d.ghost == 3)
+            model->overrides[m].color = 0x001f;
+    }
+}
+
+RaceSession::Draw RaceSession::PieceDraw(const G3Model *m, const MtxFx43 &mtx, int rotation, int ghost) const
+{
+    Draw d;
+    d.model = m;
+    d.ghost = ghost;
+    RaceMatrix(mtx, d.matrix);
+    d.lit = false;
+    if (lighting) {
+        d.light = G3DrawLight();
+        d.light.env = &lightEnv;
+        d.light.set = 1;
+        RotationOf(mtx, d.light.rot);
+        d.light.variant = rotation & 3;
+        d.lit = true;
+    }
+    return d;
 }
 
 // The material controllers (itcm 0x01fff814 / 0x01fff858): a light's shapes are drawn while its level is not 0,
@@ -180,6 +255,19 @@ void RaceSession::ApplyCarLights()
         o.hidden = carLights.level[l] == 0;
         o.alpha = carLights.level[l] & 31;
         o.color = colors[l];
+    }
+}
+
+// The start lights: a light's shapes are drawn while its level is not 0, with the level as polygon alpha and its
+// colour (red 0x1f, amber 0x3ef, green 0x3e0: main 0x0206aaf4) as DIF_AMB and SPE_EMI.
+void RaceSession::ApplyStartLights()
+{
+    static const u16 colors[3] = {0x1f, 0x3ef, 0x3e0};
+    for (const StartLight &s : startLights) {
+        G3Model::MatOverride &o = s.model->overrides[s.material];
+        o.hidden = startLevel[s.light] == 0;
+        o.alpha = startLevel[s.light] & 31;
+        o.color = colors[s.light];
     }
 }
 
@@ -203,84 +291,283 @@ bool RaceSession::ShadowDraw(float *matrix, u16 *rgb555, int *alpha) const
 
 RaceSession::~RaceSession()
 {
+    if (groundPlane)
+        dsCollisionWorld::Get()->RemoveShape(groundPlane.get());
     pieces.clear();
     models.clear(); // G3Model's destructor frees the back-end textures and vertex arrays
 }
 
 void RaceUnloadWorld() { dsCollisionWorld::Get()->Clear(); }
 
-bool RaceSession::Load(const char *trackName)
+// Positions of ov003 0x0211d37c (Stadium), 0x0211d02c (Island), 0x0211ccec (Snow): four nodes around the centre of the
+// grid, the first two with name 0, the others with name 1; nodes 1 and 3 turned half a turn about y (MTX_RotY43_ by
+// pi through FX_SinCosTable_, as a piece's two quarter turns). Coast (0x0211ca88): one landscape, turned likewise.
+// The nodes take draw order 0x15 (after the models' 0x10), which the drivers' separate pass keeps.
+// @port ov003:0211d37c done
+// @port ov003:0211d02c done
+// @port ov003:0211ccec done
+// @port ov003:0211ca88 done
+void RaceSession::LoadScenery(int env)
 {
+    struct Layout {
+        const char *names[2];
+        fx32 pos[4][3];
+        fx32 centre, y;
+        int count;
+        float guardEdge; // PSP split: edges kept 2.5 times shorter than the scenery's distance from the track
+    };
+    static const Layout s_layout[ENV_COUNT] = {
+        {{"Tracks/sta/StadiumSide", "Tracks/sta/StadiumScreen"},
+         {{0x1e0000, 0, 0}, {(fx32)0xffe00001, 0, 0}, {0, 0, (fx32)0xffe28001}, {0, 0, 0x1d8000}}, 0x140000, 0, 4, 28},
+        {{"misc/island/large", "misc/island/small"},
+         {{0x3cf000, 0, 0}, {(fx32)0xffc31001, 0, 0}, {0, 0, (fx32)0xffc63001}, {0, 0, 0x39d000}}, 0x280000,
+         (fx32)0xffffc001, 4, 36},
+        {{"misc/snow/lg_snow", "misc/snow/sm_snow"},
+         {{0x24e000, 0, 0}, {(fx32)0xffdb2001, 0, 0}, {0, 0, (fx32)0xffdbc001}, {0, 0, 0x244000}}, 0x140000, 0, 4, 28},
+        {{"misc/coast/coastbackground", nullptr}, {{0x177000, 0, 0x12c000}}, 0, 0, 1, 90},
+    };
+    const Layout &l = s_layout[env];
+    for (int i = 0; i < l.count; i++) {
+        G3Model *m = RaceLoadModel(l.names[i >> 1]);
+        if (!m) {
+            fprintf(stderr, "no model %s\n", l.names[i >> 1]);
+            continue;
+        }
+        models.emplace_back(m);
+        m->guardEdge = l.guardEdge;
+        Scenery s;
+        s.model = m;
+        s.variant = env == ENV_COAST || (i & 1) ? 2 : 0;
+        if (s.variant)
+            MTX_RotY43_(&s.matrix, dsSin(0x3244), dsCos(0x3244));
+        else
+            dsMtx43_Identity(&s.matrix);
+        s.matrix.m[3][0] = l.pos[i][0] + l.centre;
+        s.matrix.m[3][1] = l.pos[i][1] + l.y;
+        s.matrix.m[3][2] = l.pos[i][2] + l.centre;
+        scenery.push_back(s);
+    }
+}
+
+bool RaceSession::Load(const char *sceneName)
+{
+    // "<env>/<difficulty>/<n>": the environment's short name picks the piece catalogue, the car and the rest;
+    // "pla/...": platform mode, the environment from the scene's header.
+    int env = -1;
+    mode = !strncmp(sceneName, "pla/", 4) ? 8 : 1;
+    if (mode == 8) {
+        dsTrack header;
+        if (header.LoadScene(sceneName, false))
+            env = header.info.environment;
+    } else {
+        for (int e = 0; e < ENV_COUNT; e++)
+            if (!strncmp(sceneName, dsRaceSetup::EnvironmentName(e), 3) && sceneName[3] == '/')
+                env = e;
+    }
+    if (env < 0 || env >= ENV_COUNT) {
+        fprintf(stderr, "unknown environment in %s\n", sceneName);
+        return false;
+    }
     dsRaceSetup *setup = dsRaceSetup::Get();
-    setup->mode = 1;
-    setup->SetEnvironment(ENV_COAST);
-    dsPieceDataTable::Get()->Load(ENV_COAST);
-    std::string scene = std::string("coa/") + trackName;
+    setup->mode = mode;
+    setup->SetEnvironment(env);
+    dsPieceDataTable::Get()->Load(env);
+    std::string scene = sceneName;
     if (!track.LoadScene(scene.c_str(), true)) {
         fprintf(stderr, "cannot load scene %s\n", scene.c_str());
         return false;
     }
+    return Build(sceneName);
+}
+
+bool RaceSession::LoadTrack(int env, int mode_, const dsTrackInfo &info, const std::vector<dsTrackPiece *> &src)
+{
+    mode = mode_;
+    dsRaceSetup *setup = dsRaceSetup::Get();
+    setup->mode = mode;
+    setup->SetEnvironment(env);
+    track.info = info;
+    for (const dsTrackPiece *p : src)
+        if (!p->autoTerrain && p->id >= 0)
+            track.pieces.push_back(new dsTrackPiece(p->id, p->pos, p->rotation));
+    return Build("editor track");
+}
+
+bool RaceSession::LoadView(int env, int timeOfDay_)
+{
+    editorView = true;
+    mode = 6;
+    dsRaceSetup *setup = dsRaceSetup::Get();
+    setup->mode = mode;
+    setup->SetEnvironment(env);
+    track.info.environment = env;
+    track.info.timeOfDay = timeOfDay_;
+    return Build("editor view");
+}
+
+bool RaceSession::Build(const char *sceneName)
+{
+    dsRaceSetup *setup = dsRaceSetup::Get();
+    const std::string envName = setup->EnvironmentName(); // also the car's name: "coa", "isl", "sno", "sta"
     int terrain = track.BuildTerrain();
     printf("terrain: %d pieces\n", terrain);
     for (dsTrackPiece *p : track.pieces)
         p->CreateCollision();
     table.Load();
-    if (table.All().find("coa") == table.All().end())
+    if (table.All().find(envName) == table.All().end())
         return false;
-    const dsCarParams &prm = table.Get("coa");
-    if (!geo.Load("coa", 0, prm))
-        return false;
-    car.reset(new dsCarDynamics("coa", &geo));
-    car->LoadParams(prm);
-    car->pieceRotationAt = [this](const VecFx32 &p) { return track.PieceRotationAt(p); };
+    const dsCarParams &prm = table.Get(envName);
+    if (!editorView) {
+        if (!geo.Load(envName, 0, prm))
+            return false;
+        car.reset(new dsCarDynamics(envName, &geo));
+        car->LoadParams(prm);
+        car->pieceRotationAt = [this](const VecFx32 &p) { return track.PieceRotationAt(p); };
 
-    // Start, triggers and countdown: the race mode's full reset (ov003 0x02115af4).
-    progress.reset(new dsRaceProgress(&track, car.get()));
-    progress->Reset(true);
-    if (!progress->startPiece) {
-        fprintf(stderr, "no start piece\n");
-        return false;
+        // Start, triggers and countdown: the race mode's full reset (ov003 0x02115af4). The editor's test drive
+        // (mode 6) may have no start: the application places the car.
+        progress.reset(new dsRaceProgress(&track, car.get()));
+        progress->Reset(true);
+        if (!progress->startPiece && mode != 6) {
+            fprintf(stderr, "no start piece\n");
+            return false;
+        }
     }
     for (dsChaseCamera &c : cams) {
-        if (!c.Load("coa"))
-            fprintf(stderr, "config/cameras: no coa entry\n");
+        if (!c.Load(envName.c_str()))
+            fprintf(stderr, "config/cameras: no %s entry\n", envName.c_str());
         c.Reset();
     }
 
-    auto own = [this](G3Model *m) {
-        if (m)
-            models.emplace_back(m);
-        return m;
-    };
     // material.bin replaces the batch's texture list: upload once, after it (an upload before leaked the first
     // list's back-end textures on every track load).
-    batch = own(RaceLoadModel("Tracks/coa/texturebatch", false));
+    batch = Own(RaceLoadModel("Tracks/" + envName + "/texturebatch", false));
     std::vector<u8> mb;
     if (batch) {
-        if (RaceReadFile("graphics/Tracks/coa/material.bin", &mb))
+        if (RaceReadFile("graphics/Tracks/" + envName + "/material.bin", &mb))
             batch->LoadMaterialBin(mb);
         batch->Upload();
     }
-    std::map<std::string, G3Model *> cache;
-    for (const dsTrackPiece *p : track.pieces) {
-        auto it = cache.find(p->modelPath);
-        if (it == cache.end()) {
-            G3Model *m = own(RaceLoadModel(p->modelPath));
-            // The texture SRT animation next to the model (main 0x02055f78: the arrow signs' scrolling lights).
-            std::vector<u8> na;
-            if (m && batch && RaceReadFile("graphics/" + p->modelPath + ".na", &na))
-                m->LoadTexAnim(na, m->batchMaterials ? *batch : *m);
-            it = cache.emplace(p->modelPath, m).first;
-        }
-        if (it->second)
-            pieces.push_back({it->second, p});
-        if (it->second && !it->second->hasBounds)
-            it->second->ComputeBounds();
+    SyncPieces(track.pieces);
+    if (!editorView)
+        LoadCar(envName);
+    // Lighting of the track's time of day (the race setup takes it from the track, as the game's menus do for the
+    // challenges; the quick race's time of day menu picks it).
+    setup->timeOfDay = timeOfDay >= 0 && timeOfDay < 3 ? timeOfDay : track.info.timeOfDay;
+    if (!RaceBuildLighting(setup->EnvironmentName(), setup->TimeOfDayName(), &lightEnv))
+        lighting = false;
+    LoadEnvironment();
+    // Back-end conversion ahead of the race (PSP: vertex arrays with the lit colours of each piece rotation).
+    G3DrawLight dl;
+    for (size_t i = 0; i < scenery.size(); i++) {
+        G3SetDrawLight(SceneryLight(i, &dl));
+        scenery[i].model->Prepare(batch);
     }
+    for (size_t k = 0; k < pieces.size(); k++) {
+        G3SetDrawLight(PieceLight(k, &dl));
+        for (int l = 0; l < G3_DETAIL_LEVELS; l++) {
+            G3SetDrawDetail(l);
+            pieces[k].first->Prepare(batch);
+        }
+    }
+    G3SetDrawDetail(0);
+    G3SetDrawLight(nullptr);
+    Draw cd[MAX_CAR_DRAWS];
+    for (int i = 0, n = CarDraws(cd); i < n; i++) {
+        G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr); // lit: geometry and normals cached, colours per draw
+        cd[i].model->Prepare(nullptr);
+    }
+    G3SetDrawLight(nullptr);
+    if (skyModel)
+        skyModel->Prepare(nullptr);
+    if (editorView) {
+        printf("%s: %d pieces drawn, batch %s\n", sceneName, (int)pieces.size(), batch ? "ok" : "missing");
+        return true;
+    }
+    hud.Init(progress->lapCount);
+    // Race sounds (main 0x0208c04c from the race loader 0x02097aa0): the environment, horn 0 (the game takes the
+    // player's number modulo 8), output mode 1 (settings +0x2c = 0).
+    // The editor's test drive and validation (mode 6) play the environment's ambience (environment + 4).
+    dsGameAudio::Get()->StartRace(setup->environment + (mode == 6 ? 4 : 0), 0, 1, envName, prm);
+    soundEvents = progress->events.size();
+    countdownSound = -1;
+    printf("track %s: %d pieces drawn, batch %s, car model %s\n", sceneName, (int)pieces.size(),
+           batch ? "ok" : "missing", carModel ? "ok" : "missing");
+    return true;
+}
+
+G3Model *RaceSession::Own(G3Model *m)
+{
+    if (m)
+        models.emplace_back(m);
+    return m;
+}
+
+void RaceSession::SyncPieces(const std::vector<dsTrackPiece *> &list)
+{
+    pieces.clear();
+    std::vector<const dsTrackPiece *> drawn; // the track's pieces, each followed by its pillars (Snow)
+    for (const dsTrackPiece *p : list) {
+        drawn.push_back(p);
+        for (const dsTrackPiece *pl : p->pillars)
+            if (pl)
+                drawn.push_back(pl);
+    }
+    for (const dsTrackPiece *p : drawn) {
+        G3Model *m = PieceModel(p->modelPath);
+        if (m)
+            pieces.push_back({m, p});
+    }
+    visible.assign(pieces.size(), 1);
+    detail.assign(pieces.size(), 0);
+}
+
+G3Model *RaceSession::PieceModel(const std::string &path)
+{
+    auto it = modelCache.find(path);
+    if (it == modelCache.end()) {
+        G3Model *m = Own(RaceLoadModel(path));
+        if (!m)
+            fprintf(stderr, "no model %s\n", path.c_str());
+        // The texture SRT animation next to the model (main 0x02055f78: the arrow signs' scrolling lights).
+        std::vector<u8> na;
+        if (m && batch && RaceReadFile("graphics/" + path + ".na", &na))
+            m->LoadTexAnim(na, m->batchMaterials ? *batch : *m);
+        it = modelCache.emplace(path, m).first;
+        if (m && !m->hasBounds)
+            m->ComputeBounds();
+        if (m)
+            FindStartLights(m);
+    }
+    return it->second;
+}
+
+// A new piece model with start lights (main 0x0206aaf4 makes their controllers when the model loads).
+void RaceSession::FindStartLights(G3Model *m)
+{
+    if (!m->batchMaterials || !batch || !m->overrides.empty())
+        return;
+    static const char *const lightNames[3] = {"StartRed", "StartAmber", "StartGreen"};
+    for (const G3Model::Op &op : m->ops)
+        for (int l = 0; l < 3; l++)
+            if (op.kind == 1 && op.a < (int)batch->materials.size() && batch->materials[op.a].name == lightNames[l]) {
+                m->overrides.resize(batch->materials.size());
+                bool known = false;
+                for (const StartLight &s : startLights)
+                    known |= s.model == m && s.material == op.a;
+                if (!known)
+                    startLights.push_back({m, op.a, l});
+            }
+    ApplyStartLights(); // levels 0 (the model's light struct starts cleared): hidden until the countdown
+}
+
+void RaceSession::LoadCar(const std::string &envName)
+{
+    auto own = [this](G3Model *m) { return Own(m); };
     // lod1: the body at the physics scale (lod0 adds the wheel, shadow and light-cone shapes that the game
     // places itself in the visual update 0x02126d10, not ported yet).
-    carModel = own(RaceLoadModel("Cars/coa/0/lod1"));
-    shadowModel = own(RaceLoadModel("Cars/coa/shadow", false));
+    carModel = own(RaceLoadModel("Cars/" + envName + "/" + std::to_string(skin >= 0 && skin < 10 ? skin : 0) + "/lod1"));
+    shadowModel = own(RaceLoadModel("Cars/" + envName + "/shadow", false));
     carLights.Reset(); // ov003 0x020fd914
     G3SetTexAnimFrame(texAnimFrame = 0);
     if (carModel) {
@@ -296,7 +583,8 @@ bool RaceSession::Load(const char *trackName)
     }
     // Wheels: lwheel for 0 and 2, rwheel for 1 and 3 (ov003 0x020fd914 picks the name per wheel; rwheel has no
     // textures of its own and shows lwheel's).
-    G3Model *lw = RaceLoadModel("Cars/coa/lwheel", false), *rw = RaceLoadModel("Cars/coa/rwheel", false);
+    G3Model *lw = RaceLoadModel("Cars/" + envName + "/lwheel", false);
+    G3Model *rw = RaceLoadModel("Cars/" + envName + "/rwheel", false);
     if (lw && rw)
         rw->BorrowTextures(*lw);
     for (G3Model *w : {lw, rw})
@@ -304,10 +592,13 @@ bool RaceSession::Load(const char *trackName)
             w->Upload();
     wheelModels[0] = own(lw);
     wheelModels[1] = own(rw);
-    // Lighting of the track's time of day (the race setup takes it from the track, as the game's menus do).
-    setup->timeOfDay = track.info.timeOfDay;
-    if (!RaceBuildLighting(setup->EnvironmentName(), setup->TimeOfDayName(), &lightEnv))
-        lighting = false;
+}
+
+// Sky, sea, ground plane and scenery of the environment and time of day in the race setup.
+void RaceSession::LoadEnvironment()
+{
+    auto own = [this](G3Model *m) { return Own(m); };
+    dsRaceSetup *setup = dsRaceSetup::Get();
     // Sky dome: Sky/<env>/sky_<tod>, scaled (7987, 6349, 7987) / 4096 on Coast (ov003 0x0211de20; Island uses
     // (10035, 7168, 10035)); drawn around the camera by the drivers.
     skyModel = own(RaceLoadModel(std::string("Sky/") + setup->EnvironmentName() + "/sky_" + setup->TimeOfDayName()));
@@ -336,25 +627,16 @@ bool RaceSession::Load(const char *trackName)
     } else {
         seaModel = nullptr;
     }
-    // Back-end conversion ahead of the race (PSP: vertex arrays with the lit colours of each piece rotation).
-    G3DrawLight dl;
-    for (size_t k = 0; k < pieces.size(); k++) {
-        G3SetDrawLight(PieceLight(k, &dl));
-        pieces[k].first->Prepare(batch);
-    }
-    G3SetDrawLight(nullptr);
-    Draw cd[5];
-    for (int i = 0, n = CarDraws(cd); i < n; i++) {
-        G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr); // lit: geometry and normals cached, colours per draw
-        cd[i].model->Prepare(nullptr);
-    }
-    G3SetDrawLight(nullptr);
-    if (skyModel)
-        skyModel->Prepare(nullptr);
-    hud.Init(progress->lapCount);
-    printf("track %s: %d pieces drawn, batch %s, car model %s\n", trackName, (int)pieces.size(),
-           batch ? "ok" : "missing", carModel ? "ok" : "missing");
-    return true;
+    // The ground (ov003 0x0211de20, collision world vtable +0x10 = 0x0205b4bc, normal (0, 1, 0), every mask): solid
+    // ground at y = 0 with the rough material 1 on Stadium and Snow, the sea floor on Island (y = -16) and Coast
+    // (y = -19) with material 3. Without it a car off the track fell for ever on Stadium and Snow.
+    static const fx32 s_groundY[ENV_COUNT] = {0, (fx32)0xffff0001, 0, (fx32)0xfffed001};
+    static const u8 s_groundMaterial[ENV_COUNT] = {1, 3, 1, 3};
+    const VecFx32 groundNormal = {0, FX32_ONE, 0};
+    groundPlane.reset(new dsCollisionPlaneShape(groundNormal, s_groundY[setup->environment], 0xffffffff,
+                                                s_groundMaterial[setup->environment]));
+    dsCollisionWorld::Get()->AddShape(groundPlane.get());
+    LoadScenery(setup->environment);
 }
 
 void RaceSession::Cull(float aspect, float nearZ, float farZ)
@@ -381,6 +663,7 @@ void RaceSession::Cull(float aspect, float nearZ, float farZ)
     // Side planes through the eye: normal (cos a, -sin a) in the (x, z) plane, tan a = tx (resp. ty).
     float cx = 1 / sqrtf(1 + tx * tx), sx = tx * cx, cy = 1 / sqrtf(1 + ty * ty), sy = ty * cy;
     visible.assign(pieces.size(), 1);
+    detail.assign(pieces.size(), 0);
     float g[16];
     for (size_t k = 0; k < pieces.size(); k++) {
         const G3Model *m = pieces[k].first;
@@ -400,6 +683,15 @@ void RaceSession::Cull(float aspect, float nearZ, float farZ)
         float z = c[0] * f[0] + c[1] * f[1] + c[2] * f[2];
         if (z < nearZ - r || z > farZ + r || fabsf(x) * cx - z * sx > r || fabsf(y) * cy - z * sy > r)
             visible[k] = 0;
+        // A triangle of edges up to E whose vertices are all at least 2.5 E from the eye stays within about 70
+        // degrees of the view axis when a part of it is in view: inside the GE's guard band (82 degrees at 480 x
+        // 272 with this FOV).
+        float d = sqrtf(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) - r;
+        for (int l = G3_DETAIL_LEVELS - 1; l > 0; l--)
+            if (d >= 2.5f * G3DetailEdge(l)) {
+                detail[k] = (u8)l;
+                break;
+            }
     }
 }
 
@@ -434,6 +726,38 @@ void RaceSession::Frame(const dsCarInput &in)
             if (ty == dsRaceEvent::RESTART || ty == dsRaceEvent::RESPAWN)
                 cams[camIndex].Reset();
         }
+    // Sounds of the frame: checkpoints (ov003 0x0210e9fc) and the finish (0x0210ecf0) play CHECKPOINT, a restart or
+    // a respawn resets the car audio (0x020f7e6c), the countdown beeps (0x02114ee4: COUNTDOWN_1 above 2 s, above
+    // 1 s and above 0, COUNTDOWN_2 at 0), then the player's skids and collisions (0x0210ed9c).
+    dsGameAudio *ga = dsGameAudio::Get();
+    bool go = false;
+    for (; soundEvents < progress->events.size(); soundEvents++) {
+        const dsRaceEvent &ev = progress->events[soundEvents];
+        if (ev.type == dsRaceEvent::CHECKPOINT || ev.type == dsRaceEvent::FINISH)
+            ga->PlaySe("CHECKPOINT");
+        else if (ev.type == dsRaceEvent::RESTART || ev.type == dsRaceEvent::RESPAWN)
+            dsCarAudio::Get()->RaceReset();
+        if (ev.type == dsRaceEvent::RESTART)
+            countdownSound = -1;
+        if (ev.type == dsRaceEvent::GO)
+            go = true;
+    }
+    if (progress->countdown || go) {
+        fx32 c = progress->clock;
+        int step = c > 0x2000 ? 0 : c > 0x1000 ? 1 : c > 0 ? 2 : c == 0 ? 3 : countdownSound;
+        if (step != countdownSound) {
+            ga->PlaySe(step == 3 ? "COUNTDOWN_2" : "COUNTDOWN_1");
+            countdownSound = step;
+        }
+        // The start lights (same function): red above 1 s, amber above 0, green at 0; they stay as set after.
+        if (c >= 0) {
+            startLevel[0] = c > 0x1000 ? 0xd : 0;
+            startLevel[1] = c > 0 && c <= 0x1000 ? 0xd : 0;
+            startLevel[2] = c == 0 ? 0xd : 0;
+            ApplyStartLights();
+        }
+    }
+    dsCarAudio::Get()->PlayerUpdate(*car);
     cams[camIndex].Update(*car); // camera vtable +0x1c, once per frame
     G3SetTexAnimFrame(++texAnimFrame); // material animations: one frame per 30 Hz frame (port choice)
     // The sea's scroll advances at each of its draws (itcm 0x01fff8cc), once per 30 Hz frame in the race; here
@@ -444,12 +768,27 @@ void RaceSession::Frame(const dsCarInput &in)
     ApplyCarLights();
     // End of dsRace_Update (0x02113048); the HUD reads the free-wheel flag through ov003 0x0210e9f0.
     hud.Update(*progress, car->speed, car->noThrottle, 2, recordSplits, recordTime);
+    hud.SetRetries(mode == 8 ? progress->retries : -1);
+    // The run's ghost: recorded from the start (after the countdown) to the finish, two ticks per frame.
+    if (progress->countdown) {
+        recordStarted = false;
+    } else if (!progress->finished) {
+        if (!recordStarted) {
+            recorder.BeginRecord();
+            recordStarted = true;
+        }
+        recorder.Record(car->matrix);
+    }
     if (hud.message != shownMessage) {
         shownMessage = hud.message;
         if (!shownMessage.empty())
             printf("message \"%s\"\n", shownMessage.c_str());
     }
 }
+
+void RaceSession::AudioUpdate() { dsGameAudio::Get()->Update(&cams[camIndex].matrix, car.get()); }
+
+void RaceSession::Horn() { dsCarAudio::Get()->Horn(); }
 
 G2CellBank *const *RaceHudBanks()
 {
@@ -481,7 +820,13 @@ void RaceHudSprites(int w, int h, const dsHud &hud, RaceSpriteFn sprite, void *u
 {
     G2CellBank *const *banks = RaceHudBanks();
     float k = h / 192.0f, ox = w / 2.0f - 128 * k;
-    for (const dsHudSprite &s : hud.sprites) {
+    std::vector<const dsHudSprite *> all;
+    for (const dsHudSprite &s : hud.sprites)
+        all.push_back(&s);
+    for (const dsHudSprite &s : hud.retrySprites)
+        all.push_back(&s);
+    for (const dsHudSprite *sp : all) {
+        const dsHudSprite &s = *sp;
         const G2CellBank *b = banks[s.bank];
         if (!s.visible || !b || s.cell < 0 || s.cell >= (int)b->cells.size())
             continue;

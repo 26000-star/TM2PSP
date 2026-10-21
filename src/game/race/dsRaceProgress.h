@@ -33,6 +33,12 @@ public:
     // Game mode reset (ov003 0x02115af4): full = back to the start with the countdown, otherwise respawn at the
     // last checkpoint (turned into a full reset when none was passed or the race is over).
     void Reset(bool full);
+    // The respawn of dsRace_Update (ov003 0x02113048: the respawn button or the player's own request, sinking or
+    // stuck): retries counts it (0 when no checkpoint was passed: back to the start), and on Stadium a respawn
+    // whose only checkpoint is a ring (pieces 0x10 / 0x11, which give no respawn point) restarts the race.
+    void RespawnRequest();
+    // The restart button (dsRace_Update): retries back to 0, full reset.
+    void Restart();
     // One game frame of `ticks` 1/60 s ticks: respawn request, car steps with the given input (zero until the
     // countdown ends), piece under the car, triggers, clock, countdown, sinking. ov003 0x021146a4 + 0x02113048.
     void Frame(const dsCarInput &input, int ticks);
@@ -44,6 +50,8 @@ public:
     // Car matrix the game would place at pos facing dir (ov003 0x0211c184 then the player reset): ground probe
     // from 2 units above, direction snapped to the axes, frame from dsMtx43_FromAxes.
     MtxFx43 PlacementMatrix(const VecFx32 &pos, const VecFx32 &dir) const;
+    // The editor's test drive (ov002 "Placing vehicle"): the car and its respawn point at pos, heading dir.
+    void Drop(const VecFx32 &pos, const VecFx32 &dir);
     // Start position and direction of the start piece (ov003 0x02114a6c, without the camera call).
     void StartPoint(const dsTrackPiece *piece, VecFx32 *pos, VecFx32 *dir) const;
     // Test point of the triggers: car position + 3 * unit velocity (ov003 0x02121738).
@@ -65,6 +73,8 @@ public:
     int respawnPiece = 0;              // +0x3c
     int respawnPieceId = 0;            // +0x40
     int checkpointsPassed = 0;         // +0x44
+    int lastCheckpoint = -1;           // race +0x138: piece index of the last checkpoint passed (0x02112f8c)
+    int retries = 0;                   // race +0x14c: respawns since the start (HUD +0x32c, platform mode)
     bool sinking = false;              // +0x48
     int sinkTicks = 180;               // +0x4c
     // player / clock

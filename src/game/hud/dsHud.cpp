@@ -31,6 +31,7 @@ const fx32 CLOCK_X = (252 - 70) * PX, CLOCK_Y = 28 * PX;
 // at ov003 0x0213784c ((1, 1), set by __sinit 0x02135280). 0x78 frames.
 const int MSG_FONT = 1, MSG_FRAMES = 0x78;
 const fx32 MSG_X = 128 * PX, MSG_Y = 102 * PX, MSG_WIDTH = 252 * PX, MSG_SHADOW = 1 * PX;
+const fx32 RETRY_X = 252 * PX, RETRY_Y = 46 * PX; // port: under the clock (CLOCK_Y 28)
 
 void TimeDigits(fx32 t, int d[6])
 {
@@ -423,6 +424,27 @@ void dsHud::ShowMessage(const char *text, int frames)
     }
     m_msgTimer = frames;
     message = text;
+}
+
+// @port ov003:0210b53c partial (the "Retries" line of the bottom-screen panel, on the race view)
+void dsHud::SetRetries(int retries)
+{
+    if (retries == m_retries)
+        return;
+    m_retries = retries;
+    retrySprites.clear();
+    const dsFont *font = dsFontManager::Get()->Font(MSG_FONT);
+    if (retries < 0 || !font)
+        return;
+    char text[64];
+    snprintf(text, sizeof text, "%s %d", dsStringTable::Get()->Text("Retries"), retries);
+    std::vector<dsGlyph> g = dsTextLayout(*font, text, 0, 0, 2, 0, 252 * PX);
+    for (int pass = 0; pass < 2; pass++) {
+        fx32 ox = RETRY_X + (pass ? 0 : MSG_SHADOW), oy = RETRY_Y + (pass ? 0 : MSG_SHADOW);
+        u8 bank = pass ? HUD_BANK_TEXT : HUD_BANK_TEXT_SHADOW;
+        for (const dsGlyph &e : g)
+            retrySprites.push_back({bank, true, (s16)e.cell, ox + e.x, oy + e.y, 1});
+    }
 }
 
 // @port ov003:02109610 done / ov003:021097d4 done (in Update)

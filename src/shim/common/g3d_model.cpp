@@ -343,16 +343,26 @@ bool G3Model::Load(const std::vector<u8> &d)
         shapes.push_back(dl);
     }
 
-    static const int RP[256] = {
-        /*00*/ 0, 0, 2, 1, 1, 1, 3, 1, 1, -1, -1, 0, 2, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, /*24*/ 1, -1, 4, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, /*40*/ 0, -1, -1, -1, 1, -1, 4, 2};
+    // Parameter bytes of the render commands (0x09 is handled apart). The table used to be one array whose entries
+    // past 0x2b sat two places late: 0x44 (MAT with its flag) read as unknown, which ended the bytecode there, and
+    // 37 Snow pieces lost their last draws (the top of WoodRoadStraightAir: the road before easy/0's finish).
     auto params = [&](u8 op) -> int {
-        if (op == 0x66)
-            return 5;
-        if (op == 0x80)
+        switch (op) {
+        case 0x00: case 0x01: case 0x0b: case 0x2b: case 0x40: case 0x80:
             return 0;
-        return op < 0x48 ? RP[op] : -1;
+        case 0x03: case 0x04: case 0x05: case 0x07: case 0x08: case 0x24: case 0x44:
+            return 1;
+        case 0x02: case 0x0c: case 0x0d: case 0x47:
+            return 2;
+        case 0x06:
+            return 3;
+        case 0x26: case 0x46:
+            return 4;
+        case 0x66:
+            return 5;
+        default:
+            return -1;
+        }
     };
     size_t p = off + rcOff;
     while (p < d.size()) {
@@ -664,6 +674,11 @@ void G3Model::BorrowTextures(const G3Model &from)
 // "shadowback" / "shadowfront" materials are left out)
 static int g_texAnimFrame;
 void G3SetTexAnimFrame(int frame) { g_texAnimFrame = frame; }
+
+static int g_drawDetail;
+void G3SetDrawDetail(int level) { g_drawDetail = level < 0 ? 0 : level >= G3_DETAIL_LEVELS ? G3_DETAIL_LEVELS - 1 : level; }
+int G3GetDrawDetail() { return g_drawDetail; }
+float G3DetailEdge(int level) { return level <= 0 ? 0.0f : level == 1 ? 8.0f : 24.0f; }
 
 // @port main:02055f78 partial (the .na file next to a model; NNS SRT0 decoding as NitroSystem's material animation:
 // per material five {u32 info, u32 value} pairs, info bit 29 = constant (value), bit 28 = fx16 data, else fx32

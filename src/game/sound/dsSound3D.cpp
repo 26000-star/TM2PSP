@@ -1,7 +1,5 @@
 #include "sound/dsSound3D.h"
 
-#include <math.h>
-
 #include "math/dsMath.h"
 #include "sound/dsSoundManager.h"
 
@@ -27,15 +25,6 @@ static VecFx32 MulMtx43(const VecFx32 &v, const MtxFx43 &m)
     r.y = (fx32)(((s64)v.x * m.m[0][1] + (s64)v.y * m.m[1][1] + (s64)v.z * m.m[2][1]) >> 12) + m.m[3][1];
     r.z = (fx32)(((s64)v.x * m.m[0][2] + (s64)v.y * m.m[1][2] + (s64)v.z * m.m[2][2]) >> 12) + m.m[3][2];
     return r;
-}
-
-// FX_Atan2Idx: the angle of (x, y) as a 16-bit index (port approximation through atan2: only its top 12 bits are
-// used, through the sine table).
-static u16 Atan2Idx(fx32 y, fx32 x)
-{
-    if (x == 0 && y == 0)
-        return 0;
-    return (u16)lround(atan2((double)y, (double)x) * (32768.0 / 3.14159265358979323846));
 }
 
 dsSound3D *dsSound3D::Get()
@@ -182,8 +171,12 @@ void dsSound3D::Compute()
     for (Source &s : m_src) {
         if (!s.used)
             continue;
-        if (!s.loop && !s.fresh && !sm->IsPlaying(s.sound)) {   // a one-shot sound that has ended
+        // A one-shot sound that has ended: the manager has usually freed its slot already, so Release does not
+        // count it; the DS takes it off the playing count here (without it, after 8 skids or collisions no source
+        // could start again, the engine layers included).
+        if (!s.loop && !s.fresh && !sm->IsPlaying(s.sound)) {
             Release(s.handle, 0);
+            m_playing--;
             continue;
         }
         VecFx32 rel = MulMtx43(s.pos, m_listener);
@@ -217,7 +210,9 @@ void dsSound3D::Compute()
             m_playing--;
         } else if (play) {
             fx32 az = rel.z < 0 ? -rel.z : rel.z;
-            u16 a = Atan2Idx(az, -rel.x);
+            // FX_Atan2Idx returns an s16: for a source exactly beside the listener (z = 0, x > 0) the DS indexes the
+            // table with -0x8000 >> 4, before its start; the port reads the angle as unsigned (cos 180 degrees).
+            u16 a = FX_Atan2Idx(az, -rel.x);
             int c = FX_SinCosTable_[(a >> 4) * 2 + 1] * 0x7f;   // cos x 127, fx32
             int ci = c >> 12, idx = ci < 0 ? -ci >> 1 : c >> 13;
             s64 v = (s64)(vol << 12) * kPanVolume[idx] + 0x800;

@@ -3,6 +3,7 @@
 #include "collision/dsCollisionWorld.h"
 #include "math/dsMath.h"
 #include "track/dsPieceData.h"
+#include "track/dsRaceSetup.h"
 #include "track/dsTrack.h"
 
 static inline fx32 MulR(fx32 a, fx32 b) { return (fx32)(((s64)a * b + 0x800) >> 12); }
@@ -89,8 +90,9 @@ void dsTrigger::ResetPlayer(int player, const VecFx32 &p)
 }
 
 // Piece matrix (model +0x20) with rows 0 and 1 scaled by TriggerSize.x / .y, translation + InitPos (ground or air)
-// rotated by the piece, + TriggerSize.z on y. The checkpoint loop also turns piece 0x10 on Stadium (environment 0)
-// about its forward axis, which does not apply to Coast.
+// rotated by the piece, + TriggerSize.z on y. The checkpoint loop (ov003 0x021114e4) also turns Stadium's
+// horizontal ring (piece 0x10, cpringh) a quarter about its scaled row 0 (angle 6432: MTX_RotAxis then
+// MTX_Concat33 rows x rotation), so that the gate lies in the ring.
 // @port ov003:02111280 partial (matrix part; the loop is dsRaceProgress::CreateTriggers)
 MtxFx43 dsTrigger::PieceMatrix(const dsTrackPiece &piece, const dsPieceInfo &info)
 {
@@ -100,6 +102,20 @@ MtxFx43 dsTrigger::PieceMatrix(const dsTrackPiece &piece, const dsPieceInfo &inf
     for (int c = 0; c < 3; c++) {
         m.m[0][c] = MulR(m.m[0][c], info.triggerSize.x);
         m.m[1][c] = MulR(m.m[1][c], info.triggerSize.y);
+    }
+    if (dsRaceSetup::Get()->environment == ENV_STADIUM && piece.id == 0x10) {
+        VecFx32 axis = {m.m[0][0], m.m[0][1], m.m[0][2]};
+        if (axis.x == 0 && axis.y == 0 && axis.z == 0)
+            axis = {0, 0, FX32_ONE};
+        else
+            dsVec_Normalize(&axis, &axis);
+        MtxFx43 r;
+        dsMtx43_RotateAxis(&r, &axis, dsSin(6432), dsCos(6432));
+        MtxFx43 rows = m;
+        for (int i = 0; i < 3; i++)   // MTX_Concat33: 64-bit sums truncated
+            for (int j = 0; j < 3; j++)
+                m.m[i][j] = (fx32)(((s64)rows.m[i][0] * r.m[0][j] + (s64)rows.m[i][1] * r.m[1][j] +
+                                    (s64)rows.m[i][2] * r.m[2][j]) >> 12);
     }
     off.y += info.triggerSize.z;
     m.m[3][0] += off.x;

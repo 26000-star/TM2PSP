@@ -53,6 +53,10 @@ void dsPieceDataTable::Load(s32 env)
 {
     dsRaceSetup *setup = dsRaceSetup::Get();
     setup->SetEnvironment(env);
+    // The original makes a new table for each race (its constructor reads the environment); the port keeps one, so
+    // the ground level is set here: kept from the first race's environment, it left Coast without terrain after
+    // another environment, and Snow and Island with fewer pillars and terrain pieces after Coast.
+    m_groundLevel = env == ENV_COAST ? 3 : 0;
     m_cellWidth = setup->CellWidthFx();
     m_cellHeight = setup->CellHeightFx();
     Clear();

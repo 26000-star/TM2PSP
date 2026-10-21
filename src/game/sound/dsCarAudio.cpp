@@ -8,12 +8,15 @@
 
 static dsCarAudio *s_carAudio;
 
-// ov003 0x020f93e0: an RPM of config/caraudio (fx32, 2048 = MaxRPM) in RPM: value / 1024 x (MaxRPM x 0.5), the
-// product as doubles (main 0x020125a4 / 0x0201201c / 0x02012438), the result truncated to an integer.
+// ov003 0x020f93e0: an RPM of config/caraudio (fx32, 1024 = MaxRPM) in RPM: value / 1024 x MaxRPM, MaxRPM going
+// through the doubles' rounding (main 0x020125a4 / _dadd 0x0201201c with 0.5 / 0x02012438), the result truncated
+// to an integer. (The port read the _dadd of 0.5 as a product: every threshold was halved, RevMed went silent
+// above 7031 rpm while the engine runs at 6000 to 9000, so the engine was either silent or at full volume.)
+// @port ov003:020f93e0 done
 static int ConvRpm(fx32 value, int maxRpm)
 {
     fx32 a = FX_Div(value, 0x400000);
-    fx32 b = (fx32)((double)((s64)maxRpm << 12) * 0.5);
+    fx32 b = dsRoundD(maxRpm << 12);
     return (int)(((s64)a * b + 0x800) >> 12) >> 12;
 }
 
@@ -78,6 +81,23 @@ void dsCarAudio::Reset()
     m_ready = false;
 }
 
+// @port ov003:020f7e6c partial (one car entry: the other cars' engines are restarted there) / ov003:020f6a30 done
+void dsCarAudio::RaceReset()
+{
+    for (Source &s : m_skid)
+        Release(s);
+    for (Source &s : m_collision)
+        Release(s);
+    for (Source &s : m_engine)
+        Release(s);
+    m_master = m_target = 0x7f;
+    m_step = 0;
+    m_byte0c = 0;
+    m_minDist = 5;
+    m_maxDist = 100;
+    m_player = CarEntry();
+}
+
 // @port ov003:020f89ac partial (one car entry: *0x02134e58 = 1) / ov003:020f8c90 done / ov003:020f8c28 done /
 // ov003:020f92cc done
 bool dsCarAudio::Init(const std::string &car, const dsCarParams &params)
@@ -93,6 +113,8 @@ bool dsCarAudio::Init(const std::string &car, const dsCarParams &params)
     m_step = 0;
     m_byte0c = 0;
     m_player = CarEntry();
+    m_engineGear = 0;
+    m_engineRpm = 0;
     m_collisionWait = 0;
     init(m_engine[0], "CAR_IDLE");
     init(m_engine[1], "CAR_LOW");
@@ -170,9 +192,16 @@ void dsCarAudio::FadeIn(int frames)
     m_step = frames ? 0x7f / frames : 0x7f;
 }
 
-// @port ov003:020f799c partial (the engine's own RPM, argument 3 set, is not used by the race)
+// Argument 3 (set by Engine while byte +0x0c is clear, i.e. for the human player): the car entity's engine rpm and
+// gear as they are. Otherwise a "sound rpm" from the smoothed speed: 7000 to 9000 across each gear's speed band.
+// @port ov003:020f799c done
 void dsCarAudio::SoundRpm(const dsCarDynamics &car, CarEntry &e)
 {
+    if (m_byte0c == 0) {
+        e.rpm = m_engineRpm >> 12;
+        e.gear = m_engineGear;
+        return;
+    }
     e.speed += MulRound(car.speed - e.speed, 0x29);
     if (e.speed < 0x19a) {
         e.gear = 0;
@@ -359,6 +388,13 @@ void dsCarAudio::Horn()
 // collision sound when the body contacts gave an impulse, at most every 0.5 s)
 void dsCarAudio::PlayerUpdate(const dsCarDynamics &car)
 {
+    // The car entity's copy of the engine: the gear, and the rpm eased toward the engine's, by 0.3 of the gap per
+    // frame going down (0x0210f300) and 0.1 going up (0x0210f304).
+    if (car.engine) {
+        m_engineGear = car.engine->gear;
+        fx32 k = m_engineRpm > car.engine->rpm ? 0x4cd : 0x19a;
+        m_engineRpm += (fx32)(((s64)(car.engine->rpm - m_engineRpm) * k + 0x800) >> 12);
+    }
     if (!m_ready)
         return;
     s32 w2 = car.wheels.size() > 3 ? car.wheels[2]->surface : -1;

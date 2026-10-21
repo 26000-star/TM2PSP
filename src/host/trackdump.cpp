@@ -3,6 +3,7 @@
 // Loads PieceData/<env>/PieceData like the race loader, then the scene <env>/<difficulty>/<n> (default easy/0)
 // like ov003 0x0211b404, and prints the piece catalogue, the track header, every placed piece and, with
 // --collision, the collision mesh of every model the track uses. tools/host/check_track.py checks the output.
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -18,6 +19,7 @@
 #include "track/dsTrack.h"
 #include "race/dsRaceProgress.h"
 #include "track/dsTrackLighting.h"
+#include "editor/dsEditorTrack.h"
 
 static int EnvIndex(const char *name)
 {
@@ -120,15 +122,175 @@ static void DumpTriggers(dsTrack &t)
     }
 }
 
+// --editor: the track editor's model on every race and puzzle track: bounds, overlapping notch masks, validation,
+// the bit-packed format's round trip, budgets; and every block menu entry resolves to a piece.
+static int EditorCheck()
+{
+    static const char *const diffs[] = {"practice", "easy", "medium", "hard", "extreme", "bonus"};
+    static const int counts[] = {5, 5, 5, 5, 1, 5};
+    int errors = 0;
+    for (int env = 0; env < ENV_COUNT; env++) {
+        dsRaceSetup::Get()->mode = 6;
+        dsEditorTrack ed(env);
+        dsBlockMenu menu;
+        std::string layout = std::string("screens/") + (char)toupper(dsRaceSetup::EnvironmentName(env)[0]) +
+                             (dsRaceSetup::EnvironmentName(env) + 1) + "/TrackPieceLayout";
+        if (!menu.Load(layout.c_str())) {
+            printf("ERROR no layout %s\n", layout.c_str());
+            errors++;
+        }
+        int blocks = 0;
+        for (auto &f : menu.folders)
+            for (const dsBlockMenuEntry &b : f.second)
+                if (!b.folder) {
+                    blocks++;
+                    if (!b.id) {
+                        printf("ERROR %s: block %s not in PieceData\n", layout.c_str(), b.name.c_str());
+                        errors++;
+                    }
+                } else if (!menu.Folder(b.name)) {
+                    printf("ERROR %s: folder %s missing\n", layout.c_str(), b.name.c_str());
+                    errors++;
+                }
+        printf("menu %s folders=%d blocks=%d grid=%u,%u,%u border=%d\n", dsRaceSetup::EnvironmentName(env),
+               (int)menu.folders.size(), blocks, ed.gridSize[0], ed.gridSize[1], ed.gridSize[2], ed.border);
+        for (int d = 0; d < 6; d++)
+            for (int n = 0; n < counts[d]; n++) {
+                char scene[64];
+                snprintf(scene, sizeof scene, "%s/%s/%d", dsRaceSetup::EnvironmentName(env), diffs[d], n);
+                dsRaceSetup::Get()->mode = 6;
+                dsEditorTrack t(env);
+                if (!t.LoadScene(scene, false)) {
+                    printf("ERROR cannot load %s\n", scene);
+                    errors++;
+                    continue;
+                }
+                int out = 0, shared = 0, own = 0;
+                for (dsTrackPiece *p : t.track.pieces) {
+                    if (p->autoTerrain || !p->info)
+                        continue;
+                    own++;
+                    if (!t.InBounds(*p->info, p->rotation, p->cell[0], p->cell[1], p->cell[2]))
+                        out++;
+                    std::vector<dsTrackPiece *> ov;
+                    bool locked;
+                    t.Overlaps(*p->info, p->rotation, p->cell[0], p->cell[1], p->cell[2], &ov, &locked);
+                    for (dsTrackPiece *o : ov)
+                        shared += o != p && !o->autoTerrain;
+                }
+                dsEditorCheck check = t.Validate();
+                std::vector<u8> packed = t.SavePacked();
+                dsEditorTrack back(env);
+                bool same = back.LoadPacked(packed) && back.track.pieces.size() == t.track.pieces.size();
+                for (size_t i = 0; same && i < t.track.pieces.size(); i++) {
+                    const dsTrackPiece *a = t.track.pieces[i], *b = back.track.pieces[i];
+                    same = a->id == b->id && a->rotation == b->rotation && a->pos.x == b->pos.x &&
+                           a->pos.y == b->pos.y && a->pos.z == b->pos.z;
+                }
+                printf("track %s pieces=%d out=%d shared=%d check=%d laps=%d bytes=%d poly=%d mem=%d/%d roundtrip=%d\n",
+                       scene, own, out, shared, (int)check, t.header.lapCount, (int)packed.size(), t.polyUsed,
+                       t.memUsed, t.memLimit(), same);
+                errors += out != 0 || check != CHECK_OK || !same;
+            }
+    }
+    // Puzzles: Scenes/puz/<diff>/<n> (Stadium) and their block layouts.
+    static const char *const pdiffs[] = {"practice", "easy", "medium", "hard", "extreme"};
+    static const int pcounts[] = {4, 4, 4, 4, 1};
+    for (int d = 0; d < 5; d++)
+        for (int n = 0; n < pcounts[d]; n++) {
+            char scene[64], lay[64];
+            snprintf(scene, sizeof scene, "puz/%s/%d", pdiffs[d], n);
+            snprintf(lay, sizeof lay, "puz/%s/%d-Layout", pdiffs[d], n);
+            dsTrack h;
+            dsRaceSetup::Get()->mode = 7;
+            if (!h.LoadScene(scene, false)) {
+                printf("ERROR cannot read %s\n", scene);
+                errors++;
+                continue;
+            }
+            dsEditorTrack t(h.info.environment);
+            t.puzzle = true;
+            t.LoadScene(scene, true);
+            dsBlockMenu menu;
+            menu.Load(lay);
+            int blocks = 0, missing = 0;
+            if (const std::vector<dsBlockMenuEntry> *top = menu.Folder("TopFolder"))
+                for (const dsBlockMenuEntry &b : *top) {
+                    blocks += b.count;
+                    missing += !b.id;
+                }
+            dsEditorCheck check = t.Validate();
+            printf("puzzle %s env=%d pieces=%d check=%d blocks=%d missing=%d\n", scene, h.info.environment,
+                   (int)t.track.pieces.size(), (int)check, blocks, missing);
+            errors += missing != 0;
+        }
+    // Free draw: a closed loop (4 corners, straights between), a stroke across it (two crosses), one ending on its
+    // side (a T); every
+    // road block's sides (its connection table entry two quarter turns on) must meet a neighbour's opposite side.
+    static const u8 kMask[4][4] = {{5, 12, 13, 15}, {10, 6, 14, 15}, {5, 3, 7, 15}, {10, 9, 11, 15}};
+    for (int env = 0; env < ENV_COUNT; env++) {
+        dsRaceSetup::Get()->mode = 6;
+        dsEditorTrack t(env);
+        t.FreeDrawBegin();
+        s32 y = dsPieceDataTable::Get()->GroundLevel();
+        const int loop[][2] = {{5, 5}, {6, 5}, {7, 5}, {8, 5}, {8, 6}, {8, 7}, {8, 8}, {7, 8}, {6, 8}, {5, 8},
+                               {5, 7}, {5, 6}, {5, 5}};
+        for (const auto &c : loop)
+            t.FreeDrawStep(c[0], y, c[1]);
+        t.FreeDrawBegin();
+        for (int z = 4; z <= 9; z++)
+            t.FreeDrawStep(7, y, z);
+        t.FreeDrawBegin();
+        for (int x = 11; x >= 8; x--)
+            t.FreeDrawStep(x, y, 6);
+        int roads = 0, bad = 0, kinds[4] = {};
+        for (const dsTrackPiece *p : t.track.pieces) {
+            int k = -1;
+            for (int i = 0; i < 4; i++)
+                if ((u32)p->id == t.roadIds[i])
+                    k = i;
+            if (k < 0)
+                continue;
+            roads++;
+            kinds[k]++;
+            u8 sides = kMask[(p->rotation + 2) & 3][k];
+            const struct {
+                int dx, dz;
+                u8 bit, back;
+            } dirs[4] = {{0, 1, 1, 4}, {-1, 0, 2, 8}, {0, -1, 4, 1}, {1, 0, 8, 2}};
+            for (const auto &d : dirs) {
+                if (!(sides & d.bit))
+                    continue;
+                const dsTrackPiece *n = t.PieceAt(p->cell[0] + d.dx, p->cell[1], p->cell[2] + d.dz);
+                int nk = -1;
+                for (int i = 0; n && i < 4; i++)
+                    if ((u32)n->id == t.roadIds[i])
+                        nk = i;
+                bool ends = (p->cell[0] == 7 && (p->cell[2] == 4 || p->cell[2] == 9)) ||
+                            (p->cell[0] == 11 && p->cell[2] == 6); // the strokes' open ends
+                if ((nk < 0 || !(kMask[(n->rotation + 2) & 3][nk] & d.back)) && !ends)
+                    bad++;
+            }
+        }
+        printf("freedraw %s: %d road blocks (straight %d, corner %d, T %d, cross %d), %d open sides\n",
+               dsRaceSetup::EnvironmentName(env), roads, kinds[0], kinds[1], kinds[2], kinds[3], bad);
+        errors += bad != 0 || kinds[1] != 4 || kinds[3] != 2 || kinds[2] != 1;
+    }
+    printf("editor check: %d errors\n", errors);
+    return errors ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *envName = "coa", *track = "easy/0";
-    bool raw = false, pieces = false, collision = false, lighting = false, terrain = false, triggers = false;
+    bool raw = false, editor = false, pieces = false, collision = false, lighting = false, terrain = false, triggers = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
         else if (!strcmp(argv[i], "--raw"))
             raw = true;
+        else if (!strcmp(argv[i], "--editor"))
+            editor = true;
         else if (!strcmp(argv[i], "--env") && i + 1 < argc)
             envName = argv[++i];
         else if (!strcmp(argv[i], "--track") && i + 1 < argc)
@@ -158,6 +320,8 @@ int main(int argc, char **argv)
     FSh_SetRoot(root);
     dsFileSystem::Create();
     dsFileSystem::Get()->EnableVfs(!raw);
+    if (editor)
+        return EditorCheck();
 
     dsRaceSetup *setup = dsRaceSetup::Get();
     setup->mode = 1;

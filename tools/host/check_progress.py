@@ -7,8 +7,8 @@ against the catalogue and the scene):
   - crossing the finish first: a finish track reports every checkpoint missed, a lap track nothing (the car has not
     left the start piece);
   - checkpoints in order (a second pass of cp0 counts nothing); a respawn after cp0 puts the car on cp0's start
-    point (same x/z, at most 3 units higher: ground probe); lap tracks: the multilap piece is the last checkpoint
-    and each pass counts a lap; then "finish" with the lap count (0 on finish tracks);
+    point (same x/z, from 8 units lower to 3 units higher: ground probe); lap tracks: the multilap piece is the last
+    checkpoint and each pass counts a lap; then "finish" with the lap count (0 on finish tracks);
   - a car kept under the sea after a restart is sent back 180 ticks (90 frames) later, +- 3 frames.
 Usage: python -P tools/host/check_progress.py <dump>
 """
@@ -65,7 +65,9 @@ def main():
     if got != exp:
         errors.append("events %s, expected %s" % (got, exp))
     rp, re_ = vec(respawned["pos"]), vec(respawned["expected"])
-    if rp[0] != re_[0] or rp[2] != re_[2] or not re_[1] <= rp[1] <= re_[1] + 3 * 4096:
+    # The placement casts a 10-unit segment down from 2 units above the respawn point and puts the car on the first
+    # surface (a tilted checkpoint road can lie several units below its InitPos: Stadium tiltcp pieces).
+    if rp[0] != re_[0] or rp[2] != re_[2] or not re_[1] - 8 * 4096 <= rp[1] <= re_[1] + 3 * 4096:
         errors.append("respawn at %s, expected over %s" % (rp, re_))
     last = events[-1][0]
     if not sunk + 87 <= last <= sunk + 93:

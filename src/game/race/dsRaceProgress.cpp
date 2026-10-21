@@ -35,7 +35,7 @@ int dsRaceProgress::PieceIndex(const dsTrackPiece *p) const
 // checkpoint number too, so checkpointCount counts it.
 // @port ov003:021213f8 partial (deletes every trigger; the list bookkeeping is a std::vector)
 // @port ov003:02111280 done
-// @port ov003:021114e4 partial (the Stadium piece 0x10 turn is not applied: Coast only)
+// @port ov003:021114e4 done (the Stadium ring turn is in dsTrigger::PieceMatrix)
 // @port main:0208cd28 done / main:0208cdcc done / main:0208d38c done
 void dsRaceProgress::CreateTriggers()
 {
@@ -147,6 +147,13 @@ void dsRaceProgress::PlaceCar(const MtxFx43 &m)
     m_car->respawnRequest = false;
 }
 
+void dsRaceProgress::Drop(const VecFx32 &pos, const VecFx32 &dir)
+{
+    respawnPos = pos;
+    respawnDir = dir;
+    PlaceCar(PlacementMatrix(pos, dir));
+}
+
 // @port ov003:02115af4 partial (HUD, camera, sounds and the network/replay modes are left out)
 void dsRaceProgress::Reset(bool full)
 {
@@ -173,6 +180,7 @@ void dsRaceProgress::Reset(bool full)
         return;
     }
     checkpointsPassed = 0;
+    lastCheckpoint = -1;
     lapsLeft = lapCount;
     lapsDone = 0;
     finishTime = -1;
@@ -188,6 +196,27 @@ void dsRaceProgress::Reset(bool full)
     Log(dsRaceEvent::RESTART, 0);
 }
 
+// @port ov003:02113048 partial (the respawn and restart buttons' part)
+void dsRaceProgress::RespawnRequest()
+{
+    bool full = false;
+    retries = checkpointsPassed == 0 ? 0 : retries + 1;
+    if (dsRaceSetup::Get()->environment == ENV_STADIUM && checkpointsPassed == 1 && lastCheckpoint >= 0 &&
+        lastCheckpoint < (int)m_track->pieces.size()) {
+        s32 id = m_track->pieces[lastCheckpoint]->id;
+        full = id == 0x10 || id == 0x11;
+    }
+    if (full)
+        retries = 0;
+    Reset(full);
+}
+
+void dsRaceProgress::Restart()
+{
+    retries = 0;
+    Reset(true);
+}
+
 // The respawn point becomes the piece's start point (Coast: pieces 0x3c and 0xe8 also add 4 units of height and,
 // turned 2 or 3 quarters, 16 along x; other 2-cell wide pieces with an x offset as in StartPoint).
 // @port ov003:02112f8c partial (HUD split display 0x021049b0 not ported) / ov003:0211527c partial (split times
@@ -195,6 +224,7 @@ void dsRaceProgress::Reset(bool full)
 void dsRaceProgress::OnCheckpoint(int pieceIndex)
 {
     const dsTrackPiece *pc = m_track->pieces[pieceIndex];
+    lastCheckpoint = pieceIndex;
     checkpointsPassed++;
     s32 env = dsRaceSetup::Get()->environment;
     if (env != ENV_STADIUM || (pc->id != 0x10 && pc->id != 0x11)) {
@@ -352,7 +382,7 @@ void dsRaceProgress::Frame(const dsCarInput &input, int ticks)
 {
     // dsRace update: respawn request of the local player (sinking, stuck) -> mode reset 0.
     if (respawnRequest || m_car->respawnRequest)
-        Reset(false);
+        RespawnRequest();
     dsCarInput in = started ? input : dsCarInput();
     m_car->SetInput(in);
     for (int i = 0; i < ticks; i++)

@@ -1,5 +1,6 @@
 // Host test driver for the physics slice.
-//   tm_physics --root <dir> [--raw] [--track easy/0] --raycast | --engine
+//   tm_physics --root <dir> [--raw] [--env coa] [--track easy/0] --raycast | --engine | --drop | --progress | --camera
+// --env picks the environment (its piece catalogue, car and cameras): coa (default), isl, sno, sta.
 // --raycast  builds the collision world of a Coast track (one mesh shape per placed piece) and casts batches of
 //            probes over every piece, vertical and slanted, like the car's wheel and body probes; prints every hit.
 //            tools/host/check_raycast.py compares them with a float ray cast of the same triangles.
@@ -357,7 +358,7 @@ static int Camera(dsTrack &t, const char *carName)
     dsRaceProgress rp(&t, &car);
     rp.Reset(true);
     dsChaseCamera cam(1);
-    if (!cam.Load("coa"))
+    if (!cam.Load(carName))
         return 1;
     cam.Reset();
     printf("camera Height=%d Distance=%d LookAtHeight=%d DistInc=%d DistDec=%d\n", cam.height, cam.distance,
@@ -388,7 +389,7 @@ static int Camera(dsTrack &t, const char *carName)
 
 int main(int argc, char **argv)
 {
-    const char *root = "extract/files", *track = "easy/0";
+    const char *root = "extract/files", *track = "easy/0", *envName = "coa";
     bool raw = false, raycast = false, engine = false, drop = false, progress = false, camera = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
@@ -397,6 +398,8 @@ int main(int argc, char **argv)
             raw = true;
         else if (!strcmp(argv[i], "--track") && i + 1 < argc)
             track = argv[++i];
+        else if (!strcmp(argv[i], "--env") && i + 1 < argc)
+            envName = argv[++i];
         else if (!strcmp(argv[i], "--raycast"))
             raycast = true;
         else if (!strcmp(argv[i], "--engine"))
@@ -408,7 +411,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--camera"))
             camera = true;
         else {
-            fprintf(stderr, "usage: tm_physics --root <dir> [--raw] [--track easy/0] --raycast\n");
+            fprintf(stderr, "usage: tm_physics --root <dir> [--raw] [--env coa] [--track easy/0] --raycast | --engine"
+                            " | --drop | --progress | --camera\n");
             return 2;
         }
     }
@@ -418,12 +422,20 @@ int main(int argc, char **argv)
     dsFileSystem::Get()->EnableVfs(!raw);
     if (engine)
         return EngineDump();
+    int env = -1;
+    for (int e = 0; e < ENV_COUNT; e++)
+        if (!strcmp(envName, dsRaceSetup::EnvironmentName(e)))
+            env = e;
+    if (env < 0) {
+        fprintf(stderr, "unknown environment %s\n", envName);
+        return 2;
+    }
     dsRaceSetup *setup = dsRaceSetup::Get();
     setup->mode = 1;
-    setup->SetEnvironment(ENV_COAST);
-    dsPieceDataTable::Get()->Load(ENV_COAST);
+    setup->SetEnvironment(env);
+    dsPieceDataTable::Get()->Load(env);
     dsTrack t;
-    std::string scene = std::string("coa/") + track;
+    std::string scene = std::string(envName) + "/" + track;
     if (!t.LoadScene(scene.c_str(), true)) {
         fprintf(stderr, "cannot load scene %s\n", scene.c_str());
         return 1;
@@ -431,10 +443,10 @@ int main(int argc, char **argv)
     if (raycast)
         return Raycast(t);
     if (drop)
-        return Drop(t, "coa");
+        return Drop(t, envName);
     if (progress)
-        return Progress(t, "coa");
+        return Progress(t, envName);
     if (camera)
-        return Camera(t, "coa");
+        return Camera(t, envName);
     return 0;
 }

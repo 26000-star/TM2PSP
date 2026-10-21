@@ -69,14 +69,17 @@ void dsSoundManager::Unload()
 }
 
 // @port main:0205de70 partial / main:0205df58 partial (no sound heap: a sequence archive's sequence names become
-// playable at a new heap level; music and wave archives need no list)
+// playable at a new heap level; a sequence (the music) only takes a level, as its data's heap state)
 void dsSoundManager::LoadByName(const char *name)
 {
     if (!m_loaded)
         return;
     int arc = FindName(m_sdat.names[SDAT_SEQARC], name);
-    if (arc < 0)
+    if (arc < 0) {
+        if (FindName(m_sdat.names[SDAT_SEQ], name) >= 0)
+            m_level++;   // +0xa8 = NNS_SndHeapSaveState (0x02086a44), then the sequence and its bank are loaded
         return;
+    }
     m_level++;   // NNS_SndHeapSaveState
     const std::vector<std::string> &subs = m_sdat.seqArcNames[arc];
     for (int i = 0; i < m_sdat.SeqArcCount(arc); i++)

@@ -33,9 +33,12 @@ def eval_lua_data(path):
         lhs, rhs = [s.strip() for s in line.split("=", 1)]
         v = value(rhs)
         m = re.fullmatch(r"(\w+)\.(\w+)", lhs) or re.fullmatch(r"(\w+)\[(\d+)\]", lhs)
+        k = re.fullmatch(r"(\w+)\[([A-Za-z_]\w*)\]", lhs)   # t[var] = v (unluac's string keys held in locals)
         if m:
             key = int(m.group(2)) if lhs.endswith("]") else m.group(2)
             env[m.group(1)][key] = v
+        elif k:
+            env[k.group(1)][env[k.group(2)]] = v
         else:
             env[lhs] = v
     return env

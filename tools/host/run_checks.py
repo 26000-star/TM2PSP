@@ -2,8 +2,10 @@
 then the matching checker reads it. Prints one line per check and the total error count.
 
 Usage: python -P tools/host/run_checks.py [--bin build/host] [--out build/host/checks] [--quick] [--no-check]
-                                          [--dumps <dir>] [--list]
-  --quick     one track (easy/0) instead of the 26 Coast tracks
+                                          [--dumps <dir>] [--list] [--env coa|isl|sno|sta|all]
+  --quick     one track (easy/0) instead of the 26 tracks of each environment
+  --env       the environments whose tracks are checked (default coa; all: the four, 104 tracks); the checks of the
+              other environments are named track_isl_easy_0 and so on
   --no-check  only write the dumps
   --dumps     run the checkers on existing dumps <dir>/<name>.txt (e.g. the PSP suite output) instead of producing
   --list      print the check list ("<name> <program> <args>") for the check suite (tm_checksuite, PSP tm_checks)
@@ -20,7 +22,7 @@ TRACKS = ["practice/%d" % i for i in range(5)] + ["easy/%d" % i for i in range(5
 CAMERA_TRACKS = ["easy/0", "practice/0", "medium/2", "hard/0", "extreme/0"]
 
 
-def checks(tracks):
+def checks(tracks, envs=("coa",)):
     """(dump name, program, arguments, checker, checker arguments)"""
     out = [
         ("carparams", "tm_cfgdump", ["--carparams"], "check_carparams.py", []),
@@ -29,13 +31,16 @@ def checks(tracks):
         ("raycast", "tm_physics", ["--track", "easy/0", "--raycast"], "check_raycast.py", []),
         ("drop", "tm_physics", ["--drop"], "check_drop.py", []),
     ]
-    for t in tracks:
-        n = t.replace("/", "_")
-        out.append(("track_" + n, "tm_trackdump", ["--track", t, "--pieces", "--collision", "--lighting"],
-                    "check_track.py", ["--track", t]))
-        out.append(("terrain_" + n, "tm_trackdump", ["--track", t, "--terrain"], "check_terrain.py", ["--track", t]))
-        out.append(("triggers_" + n, "tm_trackdump", ["--track", t, "--triggers"], "check_triggers.py", []))
-        out.append(("progress_" + n, "tm_physics", ["--track", t, "--progress"], "check_progress.py", []))
+    for e in envs:
+        for t in tracks:
+            n = ("" if e == "coa" else e + "_") + t.replace("/", "_")
+            ea = [] if e == "coa" else ["--env", e]
+            out.append(("track_" + n, "tm_trackdump", ea + ["--track", t, "--pieces", "--collision", "--lighting"],
+                        "check_track.py", ea + ["--track", t]))
+            out.append(("terrain_" + n, "tm_trackdump", ea + ["--track", t, "--terrain"], "check_terrain.py",
+                        ea + ["--track", t]))
+            out.append(("triggers_" + n, "tm_trackdump", ea + ["--track", t, "--triggers"], "check_triggers.py", []))
+            out.append(("progress_" + n, "tm_physics", ea + ["--track", t, "--progress"], "check_progress.py", []))
     for t in CAMERA_TRACKS:
         if t in tracks:
             out.append(("camera_" + t.replace("/", "_"), "tm_physics", ["--track", t, "--camera"],
@@ -49,13 +54,15 @@ def main():
     bindir = opt("--bin", os.path.join(ROOT, "build", "host"))
     outdir = opt("--out", os.path.join(ROOT, "build", "host", "checks"))
     tracks = ["easy/0"] if "--quick" in args else TRACKS
+    env = opt("--env", "coa")
+    envs = ("coa", "isl", "sno", "sta") if env == "all" else tuple(env.split(","))
     if "--list" in args:
         for name, prog, pargs, _, _ in checks(TRACKS):
             print("%s %s %s" % (name, prog, " ".join(pargs)))
         return 0
     os.makedirs(outdir, exist_ok=True)
     total, failed = 0, []
-    for name, prog, pargs, checker, cargs in checks(tracks):
+    for name, prog, pargs, checker, cargs in checks(tracks, envs):
         exe = os.path.join(bindir, prog + (".exe" if os.name == "nt" else ""))
         dump = os.path.join(outdir, name + ".txt")
         if "--dumps" in args:
@@ -85,7 +92,7 @@ def main():
         if c.returncode != 0:
             failed.append(name)
         print("%-24s %s" % (name, last))
-    print("%d checks, %d failed, %d errors" % (len(checks(tracks)), len(failed), total))
+    print("%d checks, %d failed, %d errors" % (len(checks(tracks, envs)), len(failed), total))
     return 1 if failed else 0
 
 

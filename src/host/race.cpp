@@ -1,9 +1,13 @@
 // tm_race: drives the Coast car on a Coast track in an SDL2/OpenGL window.
-//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result]
+//   tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result] [--keys UDLROBP]
+//           [--wav out.wav] [--mute] [--no-music] [--horn-at F] [--respawn-at F]...
 // Without --track, the track menu comes first (RaceApp, src/app/race_app.h; best times in tm_race_save.txt next to
 // the program, or --save). Menus: arrows, Enter = choose, Esc = back / quit.
 // Race keys: up = accelerate, down = brake/reverse, left/right = steer, Backspace = back to the last checkpoint,
-// Enter or Esc = pause menu (continue, restart, next track, track menu), C = other chase camera.
+// Enter or Esc = pause menu (continue, restart, next track, track menu), C = other chase camera, H = horn.
+// Sound: the game's sound code and the DS sound driver (src/shim/common/snd_driver) rendered after each frame into
+// SndStream, played by an SDL audio device at 32 kHz (none for the scripted runs, or with --mute); --wav writes the
+// rendered sound of the run (kRate / 30 samples per frame, the same on the PSP: tools/psp/race_shot.ps1 -Wav).
 //
 // What runs is the ported game code: track scene, piece placement and terrain (slice 2), collision world (3a), car
 // parameters, engine and the full dsCarDynamics step (3b, 3c), and the race progress (dsRaceProgress: countdown,
@@ -28,8 +32,13 @@
 #include "g3d_gl.h"
 #include "nitro.h"
 #include "race_app.h"
+#include "snd_driver.h"
+#include "sound/dsGameAudio.h"
+#include "snd_stream.h"
+#include "wav_writer.h"
 #include "text/dsStringTable.h"
 #include "track/dsPieceData.h"
+#include "track/dsRaceSetup.h"
 
 static void LookAt(const float *eye, const float *at, const float *up)
 {
@@ -77,7 +86,13 @@ static bool SaveBmp(const char *path, int w, int h)
 }
 
 static bool topView = false, noCull = false, unlit = false;
+// --view ex,ey,ez,ax,ay,az: a fixed eye and look-at point (units) instead of the race camera (inspection).
+static bool freeView = false;
+static float viewEye[3], viewAt[3];
 static int drawnPieces = 0;
+
+// SDL audio callback: the device's thread takes the rendered frames (silence when the ring is empty).
+static void AudioCallback(void *, Uint8 *stream, int len) { SndStream::Consume((s16 *)stream, len / 4); }
 
 static void DrawRace(RaceSession &race, int w, int h)
 {
@@ -102,6 +117,12 @@ static void DrawRace(RaceSession &race, int w, int h)
             a[i] = e[i] + cm.m[2][i] / 4096.0f;
             u[i] = cm.m[1][i] / 4096.0f;
         }
+        if (freeView)
+            for (int i = 0; i < 3; i++) {
+                e[i] = viewEye[i];
+                a[i] = viewAt[i];
+                u[i] = i == 1;
+            }
         LookAt(e, a, u);
         glTranslatef(e[0], e[1], e[2]);
         glScalef(race.skyScale[0], race.skyScale[1], race.skyScale[2]);
@@ -134,7 +155,10 @@ static void DrawRace(RaceSession &race, int w, int h)
         at[i] = eye[i] + cm.m[2][i] / 4096.0f;
         up[i] = cm.m[1][i] / 4096.0f;
     }
-    if (topView) {
+    if (freeView) {
+        float u[3] = {0, 1, 0};
+        LookAt(viewEye, viewAt, u);
+    } else if (topView) {
         const MtxFx43 &m = race.car->matrix;
         float pos[3] = {m.m[3][0] / 4096.0f, m.m[3][1] / 4096.0f, m.m[3][2] / 4096.0f};
         float fwd[3] = {m.m[2][0] / 4096.0f, 0, m.m[2][2] / 4096.0f};
@@ -156,23 +180,70 @@ static void DrawRace(RaceSession &race, int w, int h)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    // The scenery around the track (RaceSession::scenery) with the sky's far plane, depth tested among themselves,
+    // then the depth is cleared for the track: the scenery lies outside the track's cells.
+    if (!race.scenery.empty()) {
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glFrustum(-r, r, -t, t, n, 4000);
+        glMatrixMode(GL_MODELVIEW);
+        float sg[16];
+        for (int pass = 0; pass < 2; pass++)
+            for (size_t i = 0; i < race.scenery.size(); i++) {
+                RaceMatrix(race.scenery[i].matrix, sg);
+                glPushMatrix();
+                glMultMatrixf(sg);
+                G3DrawLight dl;
+                G3SetDrawLight(race.SceneryLight(i, &dl));
+                race.scenery[i].model->Draw(race.batch, pass);
+                glPopMatrix();
+            }
+        G3SetDrawLight(nullptr);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+    }
     float g[16];
     race.Cull((float)w / h, n, f);
+    // As the DS: every opaque polygon of the frame, then the translucent ones (foliage, nets, glass, the sea), so
+    // that a piece drawn later cannot cover the translucent parts of a nearer one.
     drawnPieces = 0;
-    for (size_t k = 0; k < race.pieces.size(); k++) {
-        auto &pc = race.pieces[k];
-        if (!race.visible[k] && !topView && !noCull)
-            continue;
-        drawnPieces++;
-        RaceMatrix(pc.second->matrix, g);
-        glPushMatrix();
-        glMultMatrixf(g);
-        G3DrawLight dl;
-        G3SetDrawLight(race.PieceLight(k, &dl));
-        pc.first->Draw(race.batch);
-        glPopMatrix();
-    }
-    G3SetDrawLight(nullptr);
+    auto drawPieces = [&](int pass) {
+        float pg[16];
+        for (size_t k = 0; k < race.pieces.size(); k++) {
+            auto &pc = race.pieces[k];
+            if (!race.visible[k] && !topView && !noCull && !freeView)
+                continue;
+            drawnPieces += pass == 0;
+            RaceMatrix(pc.second->matrix, pg);
+            glPushMatrix();
+            glMultMatrixf(pg);
+            G3DrawLight dl;
+            G3SetDrawLight(race.PieceLight(k, &dl));
+            pc.first->Draw(race.batch, pass);
+            glPopMatrix();
+        }
+        G3SetDrawLight(nullptr);
+    };
+    RaceSession::Draw cd[RaceSession::MAX_CAR_DRAWS];
+    int nd = race.CarDraws(cd);
+    auto drawCars = [&](int pass) {
+        for (int i = 0; i < nd; i++) {
+            glPushMatrix();
+            glMultMatrixf(cd[i].matrix);
+            G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr);
+            if (cd[i].ghost)
+                race.GhostLook(cd[i], true);
+            cd[i].model->Draw(cd[i].model->batchMaterials ? race.batch : nullptr, pass);
+            if (cd[i].ghost)
+                race.GhostLook(cd[i], false);
+            glPopMatrix();
+        }
+        G3SetDrawLight(nullptr);
+    };
+    drawPieces(0);
     // The car's shadow volume, after the track and before the car: the game gives the car models polygon ID 2
     // (main 0x02055970), the shadow's, so the DS draws the shadow on the track only.
     u16 shadowColor;
@@ -183,21 +254,31 @@ static void DrawRace(RaceSession &race, int w, int h)
         race.shadowModel->DrawShadowVolume(shadowColor, shadowAlpha);
         glPopMatrix();
     }
-    // The sea (itcm 0x01fff8cc): translucent, over the track, under the car.
+    drawCars(0);
+    // The editor's lines (building area, cursor column), over the opaque pieces.
+    if (!race.lines.empty()) {
+        glDisable(GL_TEXTURE_2D);
+        glDisable(GL_FOG);
+        glLineWidth(2);
+        glBegin(GL_LINES);
+        for (const RaceSession::Line &l : race.lines) {
+            glColor4ub(l.rgba & 0xff, l.rgba >> 8 & 0xff, l.rgba >> 16 & 0xff, l.rgba >> 24);
+            glVertex3fv(l.a);
+            glVertex3fv(l.b);
+        }
+        glEnd();
+        glColor4f(1, 1, 1, 1);
+    }
+    drawPieces(1);
+    // The sea (itcm 0x01fff8cc): translucent, over the track, under the car's translucent parts.
     G3QuadVertex sea[dsSeaBackdrop::QUADS * 4];
     u16 seaColor;
     if (race.SeaDraw(sea, &seaColor))
         race.seaModel->DrawQuads(0, sea, dsSeaBackdrop::QUADS, seaColor, race.lighting && race.lightEnv.fog, eye);
-    RaceSession::Draw cd[5];
-    for (int i = 0, nd = race.CarDraws(cd); i < nd; i++) {
-        glPushMatrix();
-        glMultMatrixf(cd[i].matrix);
-        G3SetDrawLight(cd[i].lit ? &cd[i].light : nullptr);
-        cd[i].model->Draw(nullptr);
-        glPopMatrix();
-    }
-    G3SetDrawLight(nullptr);
+    drawCars(1);
 }
+
+static void UploadBank(G2CellBank &b, bool linear);
 
 // HUD stand-in text: 5 x 7 glyphs as GL quads, with a shadow.
 static void DrawText(float x, float y, float px, const char *s, float r, float g, float b, void *)
@@ -243,21 +324,7 @@ static void DrawRect(float x, float y, float w, float h, float r, float g, float
 static void DrawSprite(const G2CellBank &bank, const G2Cell &c, float x, float y, float w, float h, void *)
 {
     G2CellBank &b = const_cast<G2CellBank &>(bank);
-    if (!b.gl) {
-        std::vector<u8> rgba((size_t)b.width * b.height * 4);
-        for (size_t i = 0; i < b.pixels.size(); i++) {
-            u16 p = b.pixels[i];
-            rgba[i * 4] = (u8)((p & 31) * 255 / 31);
-            rgba[i * 4 + 1] = (u8)((p >> 5 & 31) * 255 / 31);
-            rgba[i * 4 + 2] = (u8)((p >> 10 & 31) * 255 / 31);
-            rgba[i * 4 + 3] = p & 0x8000 ? 255 : 0;
-        }
-        glGenTextures(1, &b.gl);
-        glBindTexture(GL_TEXTURE_2D, b.gl);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, b.width, b.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-    }
+    UploadBank(b, false);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, b.gl);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
@@ -277,6 +344,93 @@ static void DrawSprite(const G2CellBank &bank, const G2Cell &c, float x, float y
     glDisable(GL_TEXTURE_2D);
 }
 
+// Bank atlas to a GL texture (once, kept for the program's life).
+static void UploadBank(G2CellBank &b, bool linear)
+{
+    if (b.gl)
+        return;
+    std::vector<u8> rgba((size_t)b.width * b.height * 4);
+    for (size_t i = 0; i < b.pixels.size(); i++) {
+        u16 p = b.pixels[i];
+        rgba[i * 4] = (u8)((p & 31) * 255 / 31);
+        rgba[i * 4 + 1] = (u8)((p >> 5 & 31) * 255 / 31);
+        rgba[i * 4 + 2] = (u8)((p >> 10 & 31) * 255 / 31);
+        rgba[i * 4 + 3] = p & 0x8000 ? 255 : 0;
+    }
+    glGenTextures(1, &b.gl);
+    glBindTexture(GL_TEXTURE_2D, b.gl);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, b.width, b.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+}
+
+static void TexQuad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, u32 c)
+{
+    glColor4ub((u8)c, (u8)(c >> 8), (u8)(c >> 16), (u8)(c >> 24));
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v0);
+    glVertex2f(x, y);
+    glTexCoord2f(u1, v0);
+    glVertex2f(x + w, y);
+    glTexCoord2f(u1, v1);
+    glVertex2f(x + w, y + h);
+    glTexCoord2f(u0, v1);
+    glVertex2f(x, y + h);
+    glEnd();
+}
+
+// Front end picture (FeImage, 5650 / 4444 / 8888 converted to RGBA once), modulated by the colour.
+static void DrawFeImage(const FeImage &img, float x, float y, float w, float h, float u0, float v0, float u1,
+                        float v1, u32 c, void *)
+{
+    FeImage &im = const_cast<FeImage &>(img);
+    if (!im.gl) {
+        std::vector<u8> rgba((size_t)im.stride * im.texH * 4, 0);
+        for (int py = 0; py <= im.h; py++)
+            for (int px = 0; px < im.stride; px++) {
+                size_t i = (size_t)py * im.stride + px;
+                u8 *d = &rgba[i * 4];
+                if (im.format == FeImage::F8888) {
+                    memcpy(d, im.pixels + i * 4, 4);
+                } else {
+                    u16 p = (u16)(im.pixels[i * 2] | im.pixels[i * 2 + 1] << 8);
+                    if (im.format == FeImage::F5650) {
+                        d[0] = (u8)((p & 31) * 255 / 31);
+                        d[1] = (u8)((p >> 5 & 63) * 255 / 63);
+                        d[2] = (u8)((p >> 11) * 255 / 31);
+                        d[3] = 255;
+                    } else {
+                        for (int k = 0; k < 4; k++)
+                            d[k] = (u8)((p >> (4 * k) & 15) * 17);
+                    }
+                }
+            }
+        glGenTextures(1, &im.gl);
+        glBindTexture(GL_TEXTURE_2D, im.gl);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, im.stride, im.texH, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    }
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, im.gl);
+    TexQuad(x, y, w, h, u0 / im.stride, v0 / im.texH, u1 / im.stride, v1 / im.texH, c);
+    glDisable(GL_TEXTURE_2D);
+}
+
+// Front end cell (DS font glyph or icon), modulated by the colour, filtered (the menus are scaled by 1.6).
+static void DrawFeCell(const G2CellBank &bank, const G2Cell &cl, float x, float y, float w, float h, u32 c, void *)
+{
+    G2CellBank &b = const_cast<G2CellBank &>(bank);
+    UploadBank(b, true);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, b.gl);
+    TexQuad(x, y, w, h, (float)cl.u / b.width, (float)cl.v / b.height, (float)(cl.u + cl.w) / b.width,
+            (float)(cl.v + cl.h) / b.height, c);
+    glDisable(GL_TEXTURE_2D);
+}
+
 static void DrawHud(int w, int h, const RaceApp &app)
 {
     glMatrixMode(GL_PROJECTION);
@@ -289,7 +443,12 @@ static void DrawHud(int w, int h, const RaceApp &app)
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    app.Overlay(w, h, 1, DrawText, DrawRect, DrawSprite, nullptr);
+    FeCanvas fe;
+    fe.image = DrawFeImage;
+    fe.cell = DrawFeCell;
+    fe.rect = DrawRect;
+    fe.Fit(w, h);
+    app.Overlay(fe, w, h, 1, DrawText, DrawRect, DrawSprite, nullptr);
     glEnable(GL_DEPTH_TEST);
 }
 
@@ -322,10 +481,13 @@ static void UpdateTitle(SDL_Window *win, const dsRaceProgress &rp)
 int main(int argc, char **argv)
 {
     const char *root = "extract/files", *trackName = nullptr, *shot = nullptr, *save = nullptr,
-               *screen = nullptr;
+               *screen = nullptr, *keys = nullptr, *editorEnv = nullptr, *pad = nullptr;
     int frames = -1, finishAt = -1, brakeFrom = -1, language = dsStringTable::LANG_GB, missedAt = -1,
         freeWheelAt = -1;
-    bool autoDrive = false;
+    bool autoDrive = false, mute = false;
+    const char *wav = nullptr;
+    int hornAt = -1;
+    std::vector<int> respawnAt;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc)
             root = argv[++i];
@@ -339,12 +501,23 @@ int main(int argc, char **argv)
             noCull = true;
         else if (!strcmp(argv[i], "--unlit")) // material colours, no DS lighting, fog or sky (as before phase 5)
             unlit = true;
-        else if (!strcmp(argv[i], "--top"))
+        else if (!strcmp(argv[i], "--view") && i + 1 < argc) {
+            freeView = sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &viewEye[0], &viewEye[1], &viewEye[2], &viewAt[0],
+                              &viewAt[1], &viewAt[2]) == 6;
+        } else if (!strcmp(argv[i], "--top"))
             topView = true;
         else if (!strcmp(argv[i], "--finish-at") && i + 1 < argc) // save-file test: a finish at that frame
             finishAt = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--screen") && i + 1 < argc)
             screen = argv[++i];
+        else if (!strcmp(argv[i], "--keys") && i + 1 < argc) // menu captures: keys pressed first (U D L R O B P)
+            keys = argv[++i];
+        else if (!strcmp(argv[i], "--editor") && i + 1 < argc) // the track editor on a new track: sta isl sno coa,
+            editorEnv = argv[++i];                              // or puz<n> (puzzle n, 0..16)
+        else if (!strcmp(argv[i], "--pad") && i + 1 < argc) // editor captures: one press per frame (RaceApp::EditorScript)
+            pad = argv[++i];
+        else if (!strcmp(argv[i], "--fe") && i + 1 < argc) // the front end's pictures (tools/fe/convert.py)
+            FeSetDataDir(argv[++i]);
         else if (!strcmp(argv[i], "--save") && i + 1 < argc)
             save = argv[++i];
         else if (!strcmp(argv[i], "--auto"))
@@ -355,6 +528,16 @@ int main(int argc, char **argv)
             missedAt = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--free-wheel-at") && i + 1 < argc) // HUD test: free-wheel zone from that frame
             freeWheelAt = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--wav") && i + 1 < argc) // the run's sound as a WAV file
+            wav = argv[++i];
+        else if (!strcmp(argv[i], "--mute"))
+            mute = true;
+        else if (!strcmp(argv[i], "--no-music")) // the music option off (dsGameAudio +0x10)
+            dsGameAudio::Get()->musicOn = false;
+        else if (!strcmp(argv[i], "--horn-at") && i + 1 < argc) // sound test: the horn at that frame
+            hornAt = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--respawn-at") && i + 1 < argc) // retries test: the respawn button, repeatable
+            respawnAt.push_back(atoi(argv[++i]));
         else if (!strcmp(argv[i], "--lang") && i + 1 < argc) { // strings: gb (default), us, fr, it, de, es
             static const char *const kLang[] = {"gb", "us", "fr", "it", "de", "es"};
             const char *l = argv[++i];
@@ -363,7 +546,7 @@ int main(int argc, char **argv)
                     language = k;
         }
         else {
-            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result] [--lang fr] [--missed-at F] [--free-wheel-at F]\n");
+            fprintf(stderr, "usage: tm_race --root <dir> [--track easy/0] [--frames N --shot out.bmp] [--auto [--brake-from F]] [--save file] [--screen menu|pause|result] [--keys UDLROBP] [--lang fr] [--missed-at F] [--free-wheel-at F] [--wav out.wav] [--mute] [--no-music] [--horn-at F] [--respawn-at F]...\n");
             return 2;
         }
     }
@@ -371,7 +554,6 @@ int main(int argc, char **argv)
     FSh_SetRoot(root);
     dsFileSystem::Create();
     dsFileSystem::Get()->EnableVfs(true);
-    dsStringTable::Get()->Load(language, dsStringTable::FILE_BACKEND); // the race's strings (HUD messages)
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -400,10 +582,46 @@ int main(int argc, char **argv)
         }
     }
     RaceApp app(savePath, "ENTREE", "ECHAP");
+    app.SetLanguage(language); // strings of the race (HUD messages) and of the front end
+    if (keys)
+        app.PressScript(keys);
     app.menus = frames < 0;
     app.lighting = !unlit;
+    // Sound: the archive is read in every run (the scripted runs render it for --wav); the device only plays in
+    // interactive runs.
+    std::vector<s16> capture;
+    if (wav)
+        SndStream::SetCapture(&capture);
+    SDL_AudioDeviceID dev = 0;
+    if (app.InitAudio() && frames < 0 && !mute && SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+        SDL_AudioSpec want = {}, have;
+        want.freq = SndDriver::kRate;
+        want.format = AUDIO_S16SYS;
+        want.channels = 2;
+        want.samples = 512;
+        want.callback = AudioCallback;
+        dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0); // SDL converts to the device's format
+        if (dev)
+            SDL_PauseAudioDevice(dev, 0);
+        else
+            fprintf(stderr, "audio: %s\n", SDL_GetError());
+    }
+    // Ring fill kept by the producer: two game frames plus a device buffer (about 80 ms).
+    const int kTargetFill = 2 * SndDriver::kRate / 30 + 512;
     bool menuShot = screen && !strcmp(screen, "menu"); // --frames N --screen menu: the track list
-    if (trackName || (frames >= 0 && !menuShot)) {
+    if (editorEnv) {
+        int env = -1, puzzle = -1;
+        for (int e = 0; e < ENV_COUNT; e++)
+            if (!strcmp(editorEnv, dsRaceSetup::EnvironmentName(e)))
+                env = e;
+        if (!strncmp(editorEnv, "puz", 3))
+            puzzle = atoi(editorEnv + 3);
+        if (!app.OpenEditor(env, puzzle)) {
+            fprintf(stderr, "cannot open the editor (%s)\n", editorEnv);
+            return 1;
+        }
+        app.EditorScript(pad);
+    } else if (trackName || (frames >= 0 && !menuShot)) {
         int index = app.FindTrack(trackName ? trackName : "easy/0");
         if (index < 0) {
             fprintf(stderr, "unknown track %s\n", trackName);
@@ -448,11 +666,34 @@ int main(int argc, char **argv)
                 if (playing)
                     app.race->ToggleCamera();
                 break;
+            case SDLK_h:
+                app.Horn();
+                break;
             default:
                 break;
             }
         }
         const u8 *k = SDL_GetKeyboardState(nullptr);
+        // The editor's pad: arrows = d-pad, Z = cross, X = circle, A = square, S = triangle, Q / W = L / R,
+        // Enter = START, Tab = SELECT, J L / I K = the stick.
+        if (app.Editing()) {
+            static const struct {
+                SDL_Scancode key;
+                u32 bit;
+            } kPad[] = {{SDL_SCANCODE_UP, RaceApp::PAD_UP},       {SDL_SCANCODE_DOWN, RaceApp::PAD_DOWN},
+                        {SDL_SCANCODE_LEFT, RaceApp::PAD_LEFT},   {SDL_SCANCODE_RIGHT, RaceApp::PAD_RIGHT},
+                        {SDL_SCANCODE_Z, RaceApp::PAD_CROSS},     {SDL_SCANCODE_X, RaceApp::PAD_CIRCLE},
+                        {SDL_SCANCODE_A, RaceApp::PAD_SQUARE},    {SDL_SCANCODE_S, RaceApp::PAD_TRIANGLE},
+                        {SDL_SCANCODE_Q, RaceApp::PAD_L},         {SDL_SCANCODE_W, RaceApp::PAD_R},
+                        {SDL_SCANCODE_RETURN, RaceApp::PAD_START}, {SDL_SCANCODE_TAB, RaceApp::PAD_SELECT}};
+            u32 held = 0;
+            for (const auto &p : kPad)
+                if (k[p.key])
+                    held |= p.bit;
+            float sx = (k[SDL_SCANCODE_L] ? 1.0f : 0) - (k[SDL_SCANCODE_J] ? 1.0f : 0);
+            float sy = (k[SDL_SCANCODE_K] ? 1.0f : 0) - (k[SDL_SCANCODE_I] ? 1.0f : 0);
+            app.EditorPad(held, sx, sy);
+        }
         dsCarInput in;
         bool autoBrake = autoDrive && brakeFrom >= 0 && frame >= brakeFrom;
         in.accel = (k[SDL_SCANCODE_UP] || (autoDrive && !autoBrake)) ? FX32_ONE : 0;
@@ -470,9 +711,18 @@ int main(int argc, char **argv)
             app.race->progress->events.push_back({dsRaceEvent::MISSED, 2, app.race->progress->clock});
         if (frame == freeWheelAt && app.race)
             app.race->car->noThrottle = true;
+        if (frame == hornAt)
+            app.Horn();
+        for (int f : respawnAt)
+            if (frame == f && app.race && app.screen == RaceApp::PLAYING) {
+                app.race->Respawn();
+                printf("retries %d\n", app.race->progress->retries);
+            }
         app.Frame(in);
+        SndStream::Produce(SndStream::FrameSamples(dev ? kTargetFill : -1));
         if (app.race) {
-            UpdateTitle(win, *app.race->progress);
+            if (app.race->progress)
+                UpdateTitle(win, *app.race->progress);
             DrawRace(*app.race, W, H);
         } else {
             SDL_SetWindowTitle(win, "TM2PSP host - Coast");
@@ -488,6 +738,12 @@ int main(int argc, char **argv)
             RaceSession &race = *app.race;
             glFinish();
             SaveBmp(shot, W, H);
+            if (!race.car) {
+                printf("editor view: pieces drawn %d of %d, lines %d\n", drawnPieces, (int)race.pieces.size(),
+                       (int)race.lines.size());
+                SDL_GL_SwapWindow(win);
+                continue;
+            }
             const MtxFx43 &m = race.car->matrix;
             printf("pieces drawn %d of %d\n",drawnPieces, (int)race.pieces.size());
             printf("frame %d pos=%d,%d,%d speed=%d gear=%d\n", frame, m.m[3][0], m.m[3][1], m.m[3][2],
@@ -506,7 +762,18 @@ int main(int argc, char **argv)
                 next = now;
         }
     }
+    if (dev)
+        SDL_CloseAudioDevice(dev);
     app.Unload();
+    if (wav) {
+        SndStream::SetCapture(nullptr);
+        if (!WriteWav(wav, capture, SndDriver::kRate))
+            fprintf(stderr, "cannot write %s\n", wav);
+        u32 h = 2166136261u; // FNV-1a of the samples, compared with the PSP's
+        for (s16 v : capture)
+            h = (h ^ (u16)v) * 16777619u;
+        printf("sound %d frames hash %08x\n", (int)(capture.size() / 2), h);
+    }
     SDL_Quit();
     return 0;
 }

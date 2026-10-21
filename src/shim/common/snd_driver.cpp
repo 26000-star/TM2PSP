@@ -1424,6 +1424,31 @@ void StopAll(int fadeFrames)
 
 bool IsActive(const SndHandle *h) { return Seq(h) != nullptr; }
 
+// SND_StopUnlockedChannel on each track's channels (main 0x0205d898 reads them with SND_ReadTrackInfo).
+void CutChannels(SndHandle *h)
+{
+    NnsSeq *s = Seq(h);
+    if (!s)
+        return;
+    Player &p = s_ply[s->snd];
+    for (int t = 0; t < 16; t++) {
+        Track *tr = PlayerTrack(p, t);
+        if (!tr)
+            continue;
+        while (tr->channels >= 0) {
+            ExChannel &c = s_chn[tr->channels];
+            if (s_lockedMask & 1u << c.id)
+                break;
+            ChannelCallback(c, 0);   // unlinks it from the track
+            StopHw(c.id);
+            c.priority = 0;
+            FreeChannel(c);
+            c.syncStart = c.syncStop = false;
+            c.active = false;
+        }
+    }
+}
+
 void MoveVolume(SndHandle *h, int target, int frames)
 {
     if (NnsSeq *s = Seq(h))
